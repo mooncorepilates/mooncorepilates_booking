@@ -607,7 +607,7 @@ a {
   color: var(--mute);
 }
 
-/* 會員：課程包與明細 */
+/* 會員：課程與明細 */
 .mbox {
   border-top: 1px solid var(--line);
   margin-top: 12px;
@@ -843,7 +843,7 @@ a {
 
   <section id="p-members" hidden>
     <div class="card">
-      <p class="mute" style="margin:0 0 10px">新增會員（還沒預約過、直接購買課程包的學員）</p>
+      <p class="mute" style="margin:0 0 10px">新增會員（還沒預約過、直接購買課程的學員）</p>
       <div class="row">
         <input id="mn" class="w" placeholder="姓名">
         <input id="mp" class="w" type="tel" inputmode="tel" placeholder="電話">
@@ -1464,7 +1464,7 @@ async function rescheduleUI(id,date,time,force) {
 async function convertUI(id) {
   try {
     const q=await api("convertQuote",{id});
-    const due=prompt(`${q.absent} 請假，改成一對一給 ${q.attendee}。\n一對一單堂 $${q.singlePrice}；${q.attendee} 的課程包每堂約 $${q.perSession}。\n請輸入補差額金額（建議 $${q.suggested}，不收請填 0）：`,String(q.suggested));
+    const due=prompt(`${q.absent} 請假，改成一對一給 ${q.attendee}。\n一對一單堂 $${q.singlePrice}；${q.attendee} 的課程每堂約 $${q.perSession}。\n請輸入補差額金額（建議 $${q.suggested}，不收請填 0）：`,String(q.suggested));
     if (due===null) return;
 
     let paid="0", method="";
@@ -1545,7 +1545,7 @@ function bkCard(b) {
       <span class="tag t-${esc(st)}">${esc(st)}</span>
     </div>
     <div>${esc(b["姓名"])}・<a href="tel:${esc(fixPhone(b["電話"]))}">${esc(fixPhone(b["電話"]))}</a></div>
-    <div class="mute">${pack?"課程包扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
+    <div class="mute">${pack?"課程扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
     ${b["系統備註"]?`<div class="sysnote">${esc(b["系統備註"])}</div>`:""}
     <div class="row" style="margin-top:10px">
       <button class="b sm" data-act="ok" data-id="${id}" ${st==="已預約"?"disabled":""}>確認</button>
@@ -1724,7 +1724,7 @@ $("bview").onclick=async e=>{
   const bk=S.bookings.find(x=>String(x["預約編號"])===id);
   const pack=(+bk["扣抵"]||0)>0;
 
-  if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆是課程包扣堂，會退回 1 堂。":""}`)) return;
+  if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆是課程扣堂，會退回 1 堂。":""}`)) return;
   if (act==="done" && !confirm(`標記 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 已上完課？\n會 LINE 通知學員${pack?"本堂完成與剩餘堂數":"本堂完成"}。`)) return;
 
   b.disabled=true;
@@ -2011,7 +2011,7 @@ $("sAdd").onclick=()=>{
   window.scrollTo(0,document.body.scrollHeight);
 };
 
-/* 會員：堂數、課程包、明細 */
+/* 會員：堂數、課程、明細 */
 const MOPEN = {};   // 列號 → {buy:boolean, detail:boolean}
 const MDET = {};    // 列號 → getStudentLedger 的結果
 const staffName = acc => ((S.staff||[]).find(s=>sameAcct(s.account,acc))||{}).name || acc;
@@ -2025,7 +2025,7 @@ function buyForm(m, plans) {
   const total=plans.length?String(plans[0]["方案總價"]).replace(/[^\d.]/g,""):"";
 
   return `<div class="mbox" data-buyform>
-    <b>購買課程包</b>
+    <b>購買課程</b>
     <label>方案</label><select data-f="plan">${opts}</select>
     <div class="row">
       <div style="flex:1 1 120px"><label>課型</label><select data-f="type"><option>一對一</option><option>一對二</option><option>通用</option></select></div>
@@ -2062,12 +2062,12 @@ function detailBox(m) {
         <button class="b sm" data-payok="${esc(p.id)}" data-row="${m._row}">補收款</button>`:""}
         ${p.id!=="手動調整"&&p.available>0?`<button class="b g sm" data-refund="${esc(p.id)}" data-row="${m._row}">退還堂數</button>`:""}
       </div>
-    </div>`).join(""):'<p class="mute none">還沒有課程包。</p>';
+    </div>`).join(""):'<p class="mute none">還沒有課程。</p>';
 
   const lg=d.ledger.length?d.ledger.map(x=>`<div>${esc(String(x.time).slice(0,16).replace("T"," "))}　<b>${esc(x.type)}</b>　帳面 ${x.delta>0?"+":""}${x.delta}・保留 ${x.hold>0?"+":""}${x.hold}${x.booking?"・"+esc(x.booking):""}　<span class="mute">${esc(x.by||"")}${x.reason?"・"+esc(x.reason):""}</span></div>`).join(""):'<span class="mute">還沒有異動紀錄。</span>';
 
   return `<div class="mbox" data-detail>
-    <b>課程包明細</b>${pk}
+    <b>課程明細</b>${pk}
     <div class="row" style="margin-top:10px">
       <select data-f="dc1">${so(cur[0]||"")}</select>
       <select data-f="dc2">${so(cur[1]||"")}</select>
@@ -2108,8 +2108,8 @@ function renderMembers() {
       </div>
       <div class="mute" style="margin-top:6px">專屬教練：${cc?esc(cc):"尚未指定"}</div>
       <div class="row" style="margin-top:10px">
-        ${plans.length?`<button class="b sm ${o.buy?"":"g"}" data-mtoggle="buy" data-row="${m._row}">購買課程包</button>`:""}
-        <button class="b sm ${o.detail?"":"g"}" data-mtoggle="detail" data-row="${m._row}">課程包明細</button>
+        ${plans.length?`<button class="b sm ${o.buy?"":"g"}" data-mtoggle="buy" data-row="${m._row}">購買課程</button>`:""}
+        <button class="b sm ${o.detail?"":"g"}" data-mtoggle="detail" data-row="${m._row}">課程明細</button>
       </div>
       ${o.buy&&plans.length?buyForm(m,plans):""}
       ${o.detail?detailBox(m):""}
@@ -2198,7 +2198,7 @@ $("mlist").onclick=async e=>{
       if (!confirm(`為 ${m["姓名"]} 新增「${body.plan}」${+body.gift?`（贈 ${body.gift} 堂）`:""}？\n應收 $${body.price}，已收 $${body.paid}${unpaid>0?`，未收 $${unpaid}`:""}。`)) { b.disabled=false; return; }
       await api("addPackage",body);
       (MOPEN[row]=MOPEN[row]||{}).buy=false;
-      toast("已新增課程包");
+      toast("已新增課程");
     } else if (b.dataset.payok) {
       const box=b.parentElement;
       const amount=box.querySelector('[data-pf="amt"]').value, method=box.querySelector('[data-pf="method"]').value;

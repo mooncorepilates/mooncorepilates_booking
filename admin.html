@@ -662,6 +662,7 @@ a {
       <input id="pw" type="password" class="w" autocomplete="current-password">
       <button class="b" id="go">登入</button>
     </div>
+    <p id="lerr" style="margin:12px 0 0;font-size:13px;line-height:1.7;white-space:pre-line;color:var(--bad)"></p>
   </div>
 </div>
 
@@ -913,11 +914,21 @@ async function post(action,data={}) {
   if (GAS_URL.indexOf("http") !== 0) {
     throw new Error("請先在 admin.html 設定 GAS_URL");
   }
-  const res = await fetch(GAS_URL,{
-    method:"POST",
-    body:JSON.stringify({action,...data})
-  });
-  return res.json();
+  let res;
+  try {
+    res = await fetch(GAS_URL,{
+      method:"POST",
+      body:JSON.stringify({action,...data})
+    });
+  } catch(e) {
+    throw new Error("連不到後端（網路或網址錯誤）");
+  }
+
+  try {
+    return await res.json();
+  } catch(e) {
+    throw new Error("後端回應不是正確格式（HTTP "+res.status+"）：請確認 GAS_URL 是最新的部署網址，且部署權限是「所有人」");
+  }
 }
 
 // 帶 session 的請求；過期或被要求先改密碼時回到登入頁
@@ -1047,9 +1058,14 @@ async function login() {
   if (!typed) return;
 
   $("go").disabled = true;
+  $("lerr").textContent = "";
   try {
     const r = await post("login",{pw:typed});
-    if (!r.ok) throw new Error(r.error || "登入失敗");
+    if (!r.ok) {
+      showLoginErr(r);
+      $("go").disabled = false;
+      return;
+    }
 
     setSession(r.session);
     $("pw").value = "";
@@ -1061,9 +1077,24 @@ async function login() {
       await enterApp();
     }
   } catch(e) {
-    toast(e.message);
+    showLoginErr({error:e.message});
   }
   $("go").disabled = false;
+}
+
+/* 登入失敗時直接把原因顯示在畫面上（含後端程式版本與連線網址結尾），方便判斷是密碼、鎖定還是網址／部署問題 */
+function showLoginErr(r) {
+  const parts = [r.error || "登入失敗"];
+  if (r.code) parts.push("代碼 " + r.code);
+
+  let t = parts.join("・");
+
+  if ("ok" in r) {
+    t += "\n後端版本：" + (r.v || "沒有版本資訊（這個網址連到的是舊版程式，新版還沒部署到這裡）");
+  }
+
+  t += "\n連線網址結尾：…" + GAS_URL.slice(-16);
+  $("lerr").textContent = t;
 }
 
 let PW = {forced:false,oldPw:"",needCode:false};

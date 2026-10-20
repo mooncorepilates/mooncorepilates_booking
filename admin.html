@@ -607,6 +607,37 @@ a {
   color: var(--mute);
 }
 
+/* 會員：課程包與明細 */
+.mbox {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+}
+
+.mbox label {
+  display: block;
+  font-size: 12px;
+  color: var(--mute);
+  margin: 8px 0 4px;
+}
+
+.ledger {
+  max-height: 260px;
+  overflow: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.pk {
+  background: var(--pill);
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin: 8px 0;
+}
+
 /* 剩餘堂數 */
 .credit {
   font-family: var(--serif);
@@ -658,7 +689,7 @@ a {
   <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
   <div class="card" style="margin-top:28px">
     <p class="mute" style="margin-top:0">登入後台</p>
-    <input id="acct" type="text" style="width:100%;margin-bottom:10px" placeholder="帳號" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <input id="acct" type="text" style="width:100%;margin-bottom:10px" placeholder="帳號（管理員用主密碼登入可不填）" autocomplete="username" autocapitalize="none" spellcheck="false">
     <div class="row">
       <input id="pw" type="password" class="w" placeholder="密碼" autocomplete="current-password">
       <button class="b" id="go">登入</button>
@@ -826,10 +857,22 @@ a {
   <section id="p-rentals" hidden>
     <div class="card">
       <b>新增場租</b>
-      <p class="mute" style="margin:4px 0 12px">登記後，那間教室在這段時間不會再被客戶預約。</p>
+      <p class="mute" style="margin:4px 0 12px">登記後，那間教室（或那張床）在這段時間不會再被客戶預約。課程一律整間保留，所以只要有單床場租，那間教室就不能再整間預約。</p>
 
       <div class="row">
+        <select id="rtKind">
+          <option value="場租">場租</option>
+          <option value="不開放">維修／不開放</option>
+        </select>
+        <select id="rtScope">
+          <option value="整間">整間教室</option>
+          <option value="單床">單床</option>
+        </select>
+      </div>
+
+      <div class="row" style="margin-top:10px">
         <select id="rtRoom"></select>
+        <select id="rtBed" hidden></select>
         <input id="rtDate" type="date">
       </div>
 
@@ -958,7 +1001,7 @@ a {
 </main>
 
 <script>
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzTWCIOXxicuk7BFEtmSlzHcVKZVp2UjKjCrfhRb-HzDVKznjj-Oy23_ucou7HxcMdw/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyowZ3EXmAyImLihpeBhn9wf7gqg29unT4zWZtfycsoB58IX_pFz2Fr9GWqOpRm1plBXQ/exec";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -1077,7 +1120,7 @@ function showLogin() {
   $("pw").value = "";
 }
 
-const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members,j.staff,j.avail,j.rooms,j.rentals]);
+const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members,j.staff,j.avail,j.rooms,j.rentals,j.participants,j.diffPaid]);
 let lastSig = "", lastIds = null, polling = false;
 
 /* 身分：管理員 / 員工 / 萬用密碼（開發者）。每種身分只看得到自己的分頁 */
@@ -1354,6 +1397,110 @@ const sameAcct = (a,b) => String(a||"").trim().toLowerCase()===String(b||"").tri
 // 這位員工有沒有標示這個預約的開始時間有空（只是提示，指派時後端會再完整檢查）
 const staffFree = (acct,b) => (S.avail||[]).some(a=>a.date===b["日期"]&&sameAcct(a.account,acct)&&a.slots.split(",").includes(b["時間"]));
 
+// 一對二：兩位學生各自的出席、請假處理（兩人一起改期／改一對一補差額）與補差額收款
+function jointRow(b,id,st) {
+  const bid=String(b["預約編號"]);
+  const ps=(S.participants||[]).filter(p=>String(p.bid)===bid);
+  const due=+b["補差額"]||0;
+  let html="";
+
+  if (ps.length) {
+    const active=ps.filter(p=>p.status!=="已轉一對一離開");
+    const left=active.filter(p=>p.attendance==="請假");
+    const edit=st==="已預約"||st==="待確認";
+
+    html+=`<div class="pk"><b>一對二參與者</b>
+      ${ps.map(p=>p.status==="已轉一對一離開"
+        ?`<div class="mute" style="margin:6px 0">${esc(p.name)}（${esc(p.role)}）・請假，已轉一對一（不扣課）</div>`
+        :`<div class="row sp" style="margin:6px 0"><span>${esc(p.name)}<span class="mute">（${esc(p.role)}）</span></span>
+            <select data-att="${esc(id)}" data-key="${esc(p.key)}" ${edit?"":"disabled"}>
+              <option ${p.attendance!=="請假"?"selected":""}>待上課</option>
+              <option ${p.attendance==="請假"?"selected":""}>請假</option>
+            </select></div>`).join("")}
+      ${left.length===1&&active.length===2&&edit?`<div class="mute" style="margin-top:6px">${esc(left[0].name)} 請假：可以兩人一起改期，或改成一對一（請假的人不扣課，出席的人補差額）。</div>
+        <div class="row" style="margin-top:8px">
+          <button class="b sm" data-act="resched" data-id="${esc(id)}">兩人一起改期</button>
+          <button class="b g sm" data-act="convert" data-id="${esc(id)}">改一對一補差額</button>
+        </div>`:""}
+    </div>`;
+  }
+
+  if (due>0) {
+    const got=+((S.diffPaid||{})[bid])||0, unpaid=due-got;
+    html+=`<div class="pk"><div class="row sp"><b>補差額</b><span class="mute">應收 $${due}・已收 $${got}・<b style="color:${unpaid>0?"var(--bad)":"var(--ok)"}">${unpaid>0?"未收 $"+unpaid:"已收齊"}</b></span></div>
+      ${unpaid>0?`<div class="row" style="margin-top:8px"><button class="b sm" data-act="duepay" data-id="${esc(id)}">補收款</button></div>`:""}
+    </div>`;
+  }
+
+  return html;
+}
+
+async function rescheduleUI(id,date,time,force) {
+  const bk=S.bookings.find(x=>String(x["預約編號"])===id);
+  if (!bk) return;
+
+  if (date===undefined) {
+    date=prompt(`改期：${bk["姓名"]}（目前 ${bk["日期"]} ${bk["時間"]}）\n請輸入新的日期（例如 2026-11-05）：`,bk["日期"]);
+    if (date===null) return;
+    time=prompt("請輸入新的時間（例如 14:00）：",bk["時間"]);
+    if (time===null) return;
+  }
+
+  try {
+    const r=await api("rescheduleBooking",{id,date:date.trim(),time:time.trim(),force:!!force});
+
+    if (r.needConfirm) {
+      if (confirm(r.message+"\n\n仍要改期嗎？")) return rescheduleUI(id,date,time,true);
+      return;
+    }
+
+    await load();
+    toast(`已改期到 ${r.date} ${r.time}`);
+  } catch(err) {
+    toast(err.message);
+  }
+}
+
+async function convertUI(id) {
+  try {
+    const q=await api("convertQuote",{id});
+    const due=prompt(`${q.absent} 請假，改成一對一給 ${q.attendee}。\n一對一單堂 $${q.singlePrice}；${q.attendee} 的課程包每堂約 $${q.perSession}。\n請輸入補差額金額（建議 $${q.suggested}，不收請填 0）：`,String(q.suggested));
+    if (due===null) return;
+
+    let paid="0", method="";
+
+    if (+due>0) {
+      paid=prompt(`目前已收多少？（沒收請填 0，最多 $${due}）`,due);
+      if (paid===null) return;
+      if (+paid>0) method=prompt("付款方式（刷卡／現金／轉帳）：","現金")||"";
+    }
+
+    if (!confirm(`確定改成一對一？\n・${q.absent}：解除保留，不扣課\n・${q.attendee}：補差額 $${+due||0}，已收 $${+paid||0}`)) return;
+
+    const r=await api("convertToSingle",{id,due,paid,method});
+    await load();
+    toast(`已改成一對一${r.unpaid>0?`，未收 $${r.unpaid}`:""}`);
+  } catch(err) {
+    toast(err.message);
+  }
+}
+
+async function dueUI(id) {
+  const amount=prompt("補收多少？");
+  if (amount===null) return;
+
+  const method=prompt("付款方式（刷卡／現金／轉帳）：","現金");
+  if (method===null) return;
+
+  try {
+    await api("addPayment",{id,amount,method});
+    await load();
+    toast("已登記補差額收款");
+  } catch(err) {
+    toast(err.message);
+  }
+}
+
 function assignRow(b,id,st) {
   const off = st==="已取消" ? "disabled" : "";
   const staff = S.staff||[], rooms = S.rooms||[];
@@ -1404,9 +1551,11 @@ function bkCard(b) {
       <button class="b sm" data-act="ok" data-id="${id}" ${st==="已預約"?"disabled":""}>確認</button>
       <button class="b sm" data-act="done" data-id="${id}" ${st==="已完成"||st==="已取消"?"disabled":""}>完成</button>
       <button class="b sm d" data-act="no" data-id="${id}" ${st==="已取消"?"disabled":""}>取消</button>
+      <button class="b g sm" data-act="resched" data-id="${id}" ${st==="已預約"||st==="待確認"?"":"disabled"}>改期</button>
       ${pay}
     </div>
     ${assignRow(b,id,st)}
+    ${jointRow(b,id,st)}
   </div>`;
 }
 
@@ -1459,7 +1608,7 @@ function renderRentalInfo() {
   if (!list.length) { box.hidden=true; return; }
 
   box.hidden=false;
-  box.innerHTML=`<b>${md(ds)} 場租</b>`+list.map(x=>`<div class="row sp" style="margin:6px 0"><span>${esc(x.start)}–${esc(x.end)}　${esc(x.room)}</span><span class="mute">${esc(x.renter)}</span></div>`).join("");
+  box.innerHTML=`<b>${md(ds)} 場租與不開放</b>`+list.map(x=>`<div class="row sp" style="margin:6px 0"><span>${esc(x.start)}–${esc(x.end)}　${esc(x.room)}${x.scope==="單床"&&x.bed?"・"+esc(x.bed):""}</span><span class="mute">${x.kind==="不開放"?"不開放：":""}${esc(x.renter)}</span></div>`).join("");
 }
 
 function renderStaffInfo() {
@@ -1565,6 +1714,11 @@ $("bview").onclick=async e=>{
   if (!b) return;
 
   const act=b.dataset.act, id=b.dataset.id;
+
+  if (act==="resched") return rescheduleUI(id);
+  if (act==="convert") return convertUI(id);
+  if (act==="duepay") return dueUI(id);
+
   const status={ok:"已預約",done:"已完成",no:"已取消"}[act];
   const label={ok:"已確認",done:"已完成",no:"已取消"}[act];
   const bk=S.bookings.find(x=>String(x["預約編號"])===id);
@@ -1592,6 +1746,19 @@ $("bview").onclick=async e=>{
 };
 
 $("bview").onchange=async e=>{
+  const att=e.target.closest("select[data-att]");
+  if (att) {
+    try {
+      await api("setAttendance",{id:att.dataset.att,key:att.dataset.key,value:att.value});
+      await load();
+      toast(att.value==="請假"?"已標記請假":"已恢復待上課");
+    } catch(err) {
+      toast(err.message);
+      renderBookings();
+    }
+    return;
+  }
+
   const c=e.target.closest("select[data-coach]");
   if (c) return assignCoachUI(c.dataset.coach,c.value);
 
@@ -1844,19 +2011,86 @@ $("sAdd").onclick=()=>{
   window.scrollTo(0,document.body.scrollHeight);
 };
 
-/* 會員：備註、剩餘堂數、課程包 */
+/* 會員：堂數、課程包、明細 */
+const MOPEN = {};   // 列號 → {buy:boolean, detail:boolean}
+const MDET = {};    // 列號 → getStudentLedger 的結果
+const staffName = acc => ((S.staff||[]).find(s=>sameAcct(s.account,acc))||{}).name || acc;
+const coachList = m => String(m["指定教練"]||"").split(",").map(s=>s.trim()).filter(Boolean);
+const mWho = m => ({row:m._row,name:m["姓名"],phone:m["電話"]});
+
+function buyForm(m, plans) {
+  const opts=plans.map(p=>`<option value="${esc(p["方案名稱"])}" data-total="${esc(String(p["方案總價"]).replace(/[^\d.]/g,""))}">${esc(p["方案名稱"])}｜$${esc(p["方案總價"])}</option>`).join("");
+  const so=(sel)=>`<option value="">${sel===""?"（選填）":""}</option>`+(S.staff||[]).map(s=>`<option value="${esc(s.account)}" ${sameAcct(s.account,sel)?"selected":""}>${esc(s.name)}</option>`).join("");
+  const cur=coachList(m);
+  const total=plans.length?String(plans[0]["方案總價"]).replace(/[^\d.]/g,""):"";
+
+  return `<div class="mbox" data-buyform>
+    <b>購買課程包</b>
+    <label>方案</label><select data-f="plan">${opts}</select>
+    <div class="row">
+      <div style="flex:1 1 120px"><label>課型</label><select data-f="type"><option>一對一</option><option>一對二</option><option>通用</option></select></div>
+      <div style="flex:1 1 120px"><label>贈送堂數</label><input data-f="gift" type="number" min="0" max="100" value="0" style="width:100%"></div>
+      <div style="flex:1 1 150px"><label>效期（選填）</label><input data-f="expiry" type="date" style="width:100%"></div>
+    </div>
+    <div class="row">
+      <div style="flex:1 1 120px"><label>應收金額</label><input data-f="price" type="number" min="0" value="${total}" style="width:100%"></div>
+      <div style="flex:1 1 120px"><label>已收金額</label><input data-f="paid" type="number" min="0" value="${total}" style="width:100%"></div>
+      <div style="flex:1 1 120px"><label>付款方式</label><select data-f="method"><option value="">選擇</option><option>刷卡</option><option>現金</option><option>轉帳</option></select></div>
+    </div>
+    <div class="row">
+      <div style="flex:1 1 150px"><label>專屬教練 1（必填）</label><select data-f="c1">${so(cur[0]||"")}</select></div>
+      <div style="flex:1 1 150px"><label>專屬教練 2（選填）</label><select data-f="c2">${so(cur[1]||"")}</select></div>
+    </div>
+    <button class="b" style="margin-top:12px" data-buyok="1" data-row="${m._row}">確認購買</button>
+  </div>`;
+}
+
+function detailBox(m) {
+  const d=MDET[m._row];
+  const so=(sel)=>`<option value="">（無）</option>`+(S.staff||[]).map(s=>`<option value="${esc(s.account)}" ${sameAcct(s.account,sel)?"selected":""}>${esc(s.name)}</option>`).join("");
+  const cur=coachList(m);
+
+  if (!d) return '<div class="mbox"><p class="mute none">讀取中…</p></div>';
+
+  const pk=d.packages.length?d.packages.map(p=>`<div class="pk">
+      <div class="row sp"><b>${esc(p.name)}</b><span class="mute">${esc(p.type)}${p.expiry?"・效期 "+esc(p.expiry)+(p.expired?"（已過期）":""):"・無效期"}</span></div>
+      <div class="mute" style="margin-top:4px">可預約 <b>${p.available}</b>・保留 ${p.reserved}・帳面 ${p.balance}${p.bought||p.gift?`　（購買 ${p.bought}＋贈 ${p.gift}）`:""}</div>
+      ${p.price?`<div class="mute">應收 $${p.price}・已收 $${p.paid}・<b style="color:${p.unpaid?"var(--bad)":"var(--ok)"}">${p.unpaid?"未收 $"+p.unpaid:"已收齊"}</b></div>`:""}
+      <div class="row" style="margin-top:8px">
+        ${p.unpaid?`<input type="number" min="1" max="${p.unpaid}" value="${p.unpaid}" data-pf="amt" style="width:90px">
+        <select data-pf="method"><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select>
+        <button class="b sm" data-payok="${esc(p.id)}" data-row="${m._row}">補收款</button>`:""}
+        ${p.id!=="手動調整"&&p.available>0?`<button class="b g sm" data-refund="${esc(p.id)}" data-row="${m._row}">退還堂數</button>`:""}
+      </div>
+    </div>`).join(""):'<p class="mute none">還沒有課程包。</p>';
+
+  const lg=d.ledger.length?d.ledger.map(x=>`<div>${esc(String(x.time).slice(0,16).replace("T"," "))}　<b>${esc(x.type)}</b>　帳面 ${x.delta>0?"+":""}${x.delta}・保留 ${x.hold>0?"+":""}${x.hold}${x.booking?"・"+esc(x.booking):""}　<span class="mute">${esc(x.by||"")}${x.reason?"・"+esc(x.reason):""}</span></div>`).join(""):'<span class="mute">還沒有異動紀錄。</span>';
+
+  return `<div class="mbox" data-detail>
+    <b>課程包明細</b>${pk}
+    <div class="row" style="margin-top:10px">
+      <select data-f="dc1">${so(cur[0]||"")}</select>
+      <select data-f="dc2">${so(cur[1]||"")}</select>
+      <button class="b g sm" data-ccoach="1" data-row="${m._row}">更新專屬教練</button>
+    </div>
+    <p class="mute" style="margin:14px 0 6px"><b>堂數異動紀錄</b>（最近 100 筆；帳面＝購買＋贈課＋補回－扣課－退還，可預約＝帳面－保留）</p>
+    <div class="ledger">${lg}</div>
+  </div>`;
+}
+
 function renderMembers() {
   const q=$("mq").value.trim().toLowerCase();
   const list=S.members.filter(m=>!q||(m["姓名"]+m["電話"]).toLowerCase().includes(q));
   const plans=(S.plans||[]).filter(p=>p["狀態"]!=="停用"&&parseInt(p["堂數"],10)>0);
-  const opts=plans.map(p=>`<option value="${esc(p["方案名稱"])}">${esc(p["方案名稱"])}｜$${esc(p["方案總價"])}</option>`).join("");
 
   $("mlist").innerHTML=list.length?list.map(m=>{
     const n=S.bookings.filter(b=>b["電話"]===m["電話"]&&b["狀態"]!=="已取消").length;
-    const cr=parseInt(m["剩餘堂數"],10)||0;
-    const bought=parseInt(m["購買堂數"],10)||0, used=parseInt(m["已上堂數"],10)||0;
+    const cr=parseInt(m["剩餘堂數"],10)||0, res=parseInt(m["保留堂數"],10)||0;
+    const bought=parseInt(m["購買堂數"],10)||0, gift=parseInt(m["贈送堂數"],10)||0, used=parseInt(m["已上堂數"],10)||0;
+    const o=MOPEN[m._row]||{};
+    const cc=coachList(m).map(staffName).join("、");
 
-    return `<div class="card">
+    return `<div class="card" data-card="${m._row}">
       <div class="row sp">
         <b>${esc(m["姓名"])}</b>
         <span class="mute">預約 ${n} 次</span>
@@ -1866,25 +2100,51 @@ function renderMembers() {
        　首次 ${esc(m["首次預約日期"])}
       </div>
       <div class="row sp" style="margin-top:12px">
-        <div><span class="mute">剩餘</span><span class="credit">${cr}</span><span class="mute">堂　購買 ${bought}・已上 ${used}</span></div>
+        <div><span class="mute">可預約</span><span class="credit">${cr}</span><span class="mute">堂　保留 ${res}・已上 ${used}・購買 ${bought}${gift?"＋贈 "+gift:""}</span></div>
         <div class="row">
           <button class="b g sm" data-adj="-1" data-row="${m._row}" ${cr<1?"disabled":""}>−1 堂</button>
           <button class="b g sm" data-adj="1" data-row="${m._row}">+1 堂</button>
         </div>
       </div>
-      ${plans.length?`<div class="row" style="margin-top:10px">
-        <select data-k="plan">${opts}</select>
-        <select data-k="method"><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select>
-        <button class="b sm" data-buy="1" data-row="${m._row}">新增方案</button>
-      </div>`:""}
+      <div class="mute" style="margin-top:6px">專屬教練：${cc?esc(cc):"尚未指定"}</div>
+      <div class="row" style="margin-top:10px">
+        ${plans.length?`<button class="b sm ${o.buy?"":"g"}" data-mtoggle="buy" data-row="${m._row}">購買課程包</button>`:""}
+        <button class="b sm ${o.detail?"":"g"}" data-mtoggle="detail" data-row="${m._row}">課程包明細</button>
+      </div>
+      ${o.buy&&plans.length?buyForm(m,plans):""}
+      ${o.detail?detailBox(m):""}
       <textarea rows="2" data-r="${m._row}" placeholder="寫下備註，例如偏好、提醒事項…">${esc(m["備註"])}</textarea>
     </div>`;
   }).join(""):'<p class="mute">沒有符合的會員。</p>';
 }
 
+async function loadDetail(row) {
+  const m=S.members.find(x=>x._row===+row);
+  if (!m) return;
+
+  try {
+    MDET[row]=await api("getStudentLedger",mWho(m));
+  } catch(e) {
+    toast(e.message);
+    MDET[row]={packages:[],ledger:[]};
+  }
+
+  renderMembers();
+}
+
 $("mq").oninput=renderMembers;
 
 $("mlist").onchange=async e=>{
+  // 選方案時帶入應收／已收金額
+  const sel=e.target.closest('select[data-f="plan"]');
+  if (sel) {
+    const total=sel.selectedOptions[0].dataset.total||"";
+    const box=sel.closest("[data-buyform]");
+    box.querySelector('[data-f="price"]').value=total;
+    box.querySelector('[data-f="paid"]').value=total;
+    return;
+  }
+
   const t=e.target.closest("textarea[data-r]");
   if (!t) return;
 
@@ -1901,41 +2161,70 @@ $("mlist").onchange=async e=>{
 };
 
 $("mlist").onclick=async e=>{
-  const b=e.target.closest("button[data-adj],button[data-buy]");
+  const b=e.target.closest("button[data-mtoggle],button[data-adj],button[data-buyok],button[data-payok],button[data-refund],button[data-ccoach]");
   if (!b) return;
 
-  const m=S.members.find(x=>String(x._row)===b.dataset.row);
+  const row=+b.dataset.row;
+  const m=S.members.find(x=>x._row===row);
   if (!m) return;
 
-  const who={row:m._row,name:m["姓名"],phone:m["電話"]};
+  const card=b.closest("[data-card]");
+  const f=k=>{ const el=card.querySelector(`[data-f="${k}"]`); return el?el.value:""; };
+
+  // 展開／收合
+  if (b.dataset.mtoggle) {
+    const o=MOPEN[row]=MOPEN[row]||{};
+    const k=b.dataset.mtoggle;
+    o[k]=!o[k];
+    if (k==="detail"&&o.detail) { renderMembers(); return loadDetail(row); }
+    return renderMembers();
+  }
+
   b.disabled=true;
 
   try {
-    if (b.dataset.buy) {
-      const box=b.parentElement;
-      const plan=box.querySelector('select[data-k="plan"]').value;
-      const method=box.querySelector('select[data-k="method"]').value;
-      if (!method) {
-        toast("請先選擇付款方式（刷卡／現金／轉帳）");
-        b.disabled=false;
-        return;
-      }
-      if (!confirm(`為 ${m["姓名"]} 新增「${plan}」（${method}）？\n購買堂數與剩餘堂數會立刻增加。`)) {
-        b.disabled=false;
-        return;
-      }
-      await api("addPackage",{...who,plan,method});
-      toast("已新增方案");
-    } else {
+    if (b.dataset.adj) {
       const delta=+b.dataset.adj;
-      if (!confirm(`${m["姓名"]} 的剩餘堂數 ${delta>0?"+":"−"}1？`)) {
-        b.disabled=false;
-        return;
-      }
-      await api("adjustSessions",{...who,delta,note:"後台手動調整"});
+      const note=prompt(`${m["姓名"]} 的可預約堂數 ${delta>0?"+":"−"}1。\n請填寫調整原因（必填，會留在堂數異動紀錄）：`);
+      if (note===null||!note.trim()) { if (note!==null) toast("請填寫調整原因"); b.disabled=false; return; }
+      await api("adjustSessions",{...mWho(m),delta,note:note.trim()});
       toast("已調整堂數");
+    } else if (b.dataset.buyok) {
+      const coaches=[f("c1"),f("c2")].filter(Boolean);
+      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),coaches};
+      if (!coaches.length) { toast("請至少指定 1 位專屬教練"); b.disabled=false; return; }
+      if (+body.paid>0&&!body.method) { toast("請選擇付款方式（刷卡／現金／轉帳）"); b.disabled=false; return; }
+      const unpaid=(+body.price||0)-(+body.paid||0);
+      if (!confirm(`為 ${m["姓名"]} 新增「${body.plan}」${+body.gift?`（贈 ${body.gift} 堂）`:""}？\n應收 $${body.price}，已收 $${body.paid}${unpaid>0?`，未收 $${unpaid}`:""}。`)) { b.disabled=false; return; }
+      await api("addPackage",body);
+      (MOPEN[row]=MOPEN[row]||{}).buy=false;
+      toast("已新增課程包");
+    } else if (b.dataset.payok) {
+      const box=b.parentElement;
+      const amount=box.querySelector('[data-pf="amt"]').value, method=box.querySelector('[data-pf="method"]').value;
+      if (!method) { toast("請選擇付款方式"); b.disabled=false; return; }
+      await api("addPayment",{id:b.dataset.payok,amount,method});
+      toast("已登記收款");
+    } else if (b.dataset.refund) {
+      const sessions=prompt("退還幾堂？（只能退還尚未使用、未預約的堂數）");
+      if (sessions===null) { b.disabled=false; return; }
+      const reason=prompt("退還原因（必填）：");
+      if (reason===null||!reason.trim()) { toast("請填寫退還原因"); b.disabled=false; return; }
+      const amount=prompt("同時退款金額？（沒有退款請留空）","");
+      let method="";
+      if (amount&&+amount>0) {
+        method=prompt("退款方式（刷卡／現金／轉帳）：","現金")||"";
+      }
+      await api("refundPackage",{...mWho(m),id:b.dataset.refund,sessions,reason:reason.trim(),amount:amount||0,method});
+      toast("已退還堂數");
+    } else if (b.dataset.ccoach) {
+      const coaches=[f("dc1"),f("dc2")].filter(Boolean);
+      await api("setMemberCoaches",{...mWho(m),coaches});
+      toast("已更新專屬教練");
     }
+
     await load();
+    if ((MOPEN[row]||{}).detail) await loadDetail(row);
   } catch(err) {
     toast(err.message);
     b.disabled=false;
@@ -2083,6 +2372,27 @@ function initRentalForm() {
   $("rtDate").min=today();
 }
 
+// 依「類型」「範圍」「教室」更新表單：單床才顯示床位；維修／不開放不用金額與付款方式
+function syncRentalForm() {
+  const kind=$("rtKind").value, single=$("rtScope").value==="單床";
+  const beds=(S.beds||{})[$("rtRoom").value]||[];
+  const opts=beds.map(b=>`<option>${esc(b)}</option>`).join("");
+
+  $("rtBed").hidden=!single;
+  if ($("rtBed").dataset.opts!==opts) {
+    const keep=$("rtBed").value;
+    $("rtBed").innerHTML=opts;
+    $("rtBed").dataset.opts=opts;
+    if (keep) $("rtBed").value=keep;
+  }
+
+  $("rtRenter").placeholder=kind==="不開放"?"原因（例如：冷氣維修、清潔）":"租借人";
+  $("rtAmount").hidden=kind==="不開放";
+  $("rtPay").hidden=kind==="不開放";
+}
+
+["rtKind","rtScope","rtRoom"].forEach(id=>{ $(id).onchange=syncRentalForm; });
+
 function renderRentals() {
   // 教室選單（內容沒變就不重建，避免打字時選項被重設）
   const opts=(S.rooms||[]).map(r=>`<option>${esc(r)}</option>`).join("");
@@ -2092,6 +2402,8 @@ function renderRentals() {
     $("rtRoom").dataset.opts=opts;
     if (keep) $("rtRoom").value=keep;
   }
+
+  syncRentalForm();
 
   const all=$("rtAll").checked, t=today();
   const list=(S.rentals||[])
@@ -2113,18 +2425,21 @@ function renderRentals() {
       html+=`<div class="dh ${x.date===t?"now":""}" style="${html?"":"margin-top:0"}">${md(x.date)}</div>`;
     }
 
+    const closed=x.kind==="不開放";
+    const where=esc(x.room)+(x.scope==="單床"&&x.bed?"・"+esc(x.bed):"（整間）");
+
     html+=`<div class="bk ${off?"x":""}">
       <div class="row sp">
-        <b>${esc(x.start)}–${esc(x.end)}　${esc(x.room)}</b>
-        <span class="tag ${off?"t-已取消":"t-已預約"}">${off?"已取消":"有效"}</span>
+        <b>${esc(x.start)}–${esc(x.end)}　${where}</b>
+        <span class="tag ${off?"t-已取消":(closed?"t-已完成":"t-已預約")}">${off?"已取消":(closed?"不開放":"有效")}</span>
       </div>
-      <div>${esc(x.renter)}・$${esc(x.amount)}${x.note?"・"+esc(x.note):""}</div>
+      <div>${closed?"原因："+esc(x.renter):esc(x.renter)+"・$"+esc(x.amount)}${x.note?"・"+esc(x.note):""}</div>
       <div class="row" style="margin-top:10px">
-        <select data-rpay="${esc(x.id)}" ${off?"disabled":""}>
+        ${closed?"":`<select data-rpay="${esc(x.id)}" ${off?"disabled":""}>
           <option value="">未收款</option>
           ${PAYS.map(p=>`<option ${x.method===p?"selected":""}>${p}</option>`).join("")}
-        </select>
-        <button class="b sm d" data-rcancel="${esc(x.id)}" ${off?"disabled":""}>取消場租</button>
+        </select>`}
+        <button class="b sm d" data-rcancel="${esc(x.id)}" ${off?"disabled":""}>${closed?"取消不開放":"取消場租"}</button>
       </div>
     </div>`;
   });
@@ -2136,6 +2451,9 @@ $("rtAll").onchange=renderRentals;
 
 $("rtAdd").onclick=async()=>{
   const body={
+    kind:$("rtKind").value,
+    scope:$("rtScope").value,
+    bed:$("rtScope").value==="單床"?$("rtBed").value:"",
     room:$("rtRoom").value,
     date:$("rtDate").value,
     start:$("rtStart").value,
@@ -2150,8 +2468,9 @@ $("rtAdd").onclick=async()=>{
   if (!body.date) return toast("請選擇日期");
   if (!body.start||!body.end) return toast("請選擇開始與結束時間");
   if (body.end<=body.start) return toast("結束時間必須晚於開始時間");
-  if (!body.renter) return toast("請輸入租借人");
-  if (body.amount==="") return toast("請輸入金額");
+  if (body.scope==="單床"&&!body.bed) return toast("請選擇床位");
+  if (!body.renter) return toast(body.kind==="不開放"?"請輸入原因（例如：冷氣維修）":"請輸入租借人");
+  if (body.kind==="場租"&&body.amount==="") return toast("請輸入金額");
 
   const b=$("rtAdd");
   b.disabled=true;
@@ -2173,7 +2492,7 @@ $("rtList").onclick=async e=>{
   if (!b) return;
 
   const x=(S.rentals||[]).find(r=>String(r.id)===b.dataset.rcancel);
-  if (!x||!confirm(`取消 ${md(x.date)} ${x.start}–${x.end} ${x.room} 的場租（${x.renter}）？\n取消後這間教室就能再被客戶預約。`)) return;
+  if (!x||!confirm(`取消 ${md(x.date)} ${x.start}–${x.end} ${x.room}${x.scope==="單床"?"・"+x.bed:"（整間）"} 的${x.kind==="不開放"?"不開放":"場租"}（${x.renter}）？\n取消後這${x.scope==="單床"?"張床":"間教室"}就能再被客戶預約。`)) return;
 
   b.disabled=true;
   try {

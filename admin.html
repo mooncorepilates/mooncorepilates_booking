@@ -657,9 +657,10 @@ a {
 <div id="login">
   <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
   <div class="card" style="margin-top:28px">
-    <p class="mute" style="margin-top:0">輸入後台密碼</p>
+    <p class="mute" style="margin-top:0">登入後台</p>
+    <input id="acct" type="text" style="width:100%;margin-bottom:10px" placeholder="帳號（管理員登入可不填）" autocomplete="username" autocapitalize="none" spellcheck="false">
     <div class="row">
-      <input id="pw" type="password" class="w" autocomplete="current-password">
+      <input id="pw" type="password" class="w" placeholder="密碼" autocomplete="current-password">
       <button class="b" id="go">登入</button>
     </div>
     <p id="lerr" style="margin:12px 0 0;font-size:13px;line-height:1.7;white-space:pre-line;color:var(--bad)"></p>
@@ -700,6 +701,7 @@ a {
   <div class="top">
     <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
     <div class="row">
+      <span class="mute" id="whoname" style="font-size:13px"></span>
       <button class="b g sm" id="chg">修改密碼</button>
       <button class="b g sm" id="out">登出</button>
     </div>
@@ -718,6 +720,8 @@ a {
     <button class="pill" data-t="hours">營業時間</button>
     <button class="pill" data-t="services">服務項目</button>
     <button class="pill" data-t="members">會員資料</button>
+    <button class="pill" data-t="myfree" hidden>我的空檔</button>
+    <button class="pill" data-t="myjobs" hidden>我的課表</button>
     <button class="pill" data-t="settings" id="tabSettings" hidden>系統設定</button>
   </div>
 
@@ -746,6 +750,7 @@ a {
       <button class="r" id="bn" aria-label="下一個">›</button>
     </div>
 
+    <div class="card" id="bstaff" hidden></div>
     <div class="card" id="bview"></div>
   </section>
 
@@ -815,6 +820,35 @@ a {
     <div id="mlist"></div>
   </section>
 
+  <section id="p-myfree" hidden>
+    <div class="card">
+      <div class="nav" style="margin-top:0">
+        <button class="r" id="fp" aria-label="上個月">‹</button>
+        <b id="flabel"></b>
+        <button class="r" id="fn" aria-label="下個月">›</button>
+      </div>
+      <div id="fgrid"></div>
+      <p class="mute" style="margin:12px 0 0">
+        灰色日期＝老闆還沒開放營業時間。格子上的數字是你當天標示有空的時段數，底線是尚未儲存。
+      </p>
+    </div>
+
+    <div class="card" id="fed" hidden>
+      <b id="fdate"></b>
+      <p class="mute" style="margin:4px 0 8px">點時段切換「有空」，深色的就是你有空的時段。</p>
+      <div class="chips" id="fchips"></div>
+      <div class="row">
+        <button class="b g sm" id="fAll">全部有空</button>
+        <button class="b g sm" id="fNone">全部沒空</button>
+        <button class="b g sm" id="fCopy">套用到本月所有營業日</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="p-myjobs" hidden>
+    <div class="card" id="jlist"></div>
+  </section>
+
   <section id="p-settings" hidden>
 
     <div class="card">
@@ -847,7 +881,7 @@ a {
 </main>
 
 <script>
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzTWCIOXxicuk7BFEtmSlzHcVKZVp2UjKjCrfhRb-HzDVKznjj-Oy23_ucou7HxcMdw/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyowZ3EXmAyImLihpeBhn9wf7gqg29unT4zWZtfycsoB58IX_pFz2Fr9GWqOpRm1plBXQ/exec";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -888,6 +922,7 @@ try {
   sessionStorage.removeItem("pw"); // 清掉舊版存的明文密碼
 } catch(e) {}
 
+let ROLE = "boss", MYNAME = "";
 let S = {hours:[],services:[],bookings:[],members:[]};
 let svc = [], dirty = new Map(), tab = "bookings", tt;
 
@@ -896,7 +931,9 @@ const TITLES = {
   hours:["營業時間","點選日期，挑好時段，一次套用到多天。"],
   services:["服務項目","調整體驗課與正式課程的價格、時長；不再提供的課程可以停用或刪除。包堂方案請在試算表「課程方案」分頁調整。"],
   members:["會員資料","學員的聯絡方式、購買／已上／剩餘堂數，以及你自己的備註。"],
-  settings:["系統設定","管理員專用：寫入通知用的金鑰（指令碼屬性）。"]
+  settings:["系統設定","管理員專用：寫入通知用的金鑰（指令碼屬性）。"],
+  myfree:["我的空檔","點選日期，標示你那天哪些時段有空；老闆會依這裡分配課程。"],
+  myjobs:["我的課表","老闆指派給你的課程。"]
 };
 
 function toast(m) {
@@ -961,14 +998,27 @@ function showLogin() {
   $("pw").value = "";
 }
 
-const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members]);
+const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members,j.staff,j.avail,j.rooms]);
 let lastSig = "", lastIds = null, polling = false;
 
-/* 兩種身分：客戶 / 萬用密碼（開發者）。只有萬用身分看得到「系統設定」 */
+/* 身分：老闆 / 員工 / 萬用密碼（開發者）。每種身分只看得到自己的分頁 */
+const ROLE_TABS = {
+  boss:["bookings","hours","services","members"],
+  master:["bookings","hours","services","members","settings"],
+  staff:["myfree","myjobs"]
+};
+
 function applyRole() {
-  $("testbar").hidden = !S.testMode;
-  $("tabSettings").hidden = !S.testMode;
-  if (!S.testMode && tab==="settings") setTab("bookings");
+  $("testbar").hidden = ROLE!=="master";
+
+  const tabs = ROLE_TABS[ROLE] || ROLE_TABS.boss;
+  document.querySelectorAll("#tabs .pill").forEach(p=>{
+    p.hidden = !tabs.includes(p.dataset.t);
+  });
+
+  $("whoname").textContent = ROLE==="master" ? "" : (MYNAME ? MYNAME+(ROLE==="staff"?"（員工）":"（老闆）") : "");
+
+  if (!tabs.includes(tab)) setTab(tabs[0]);
 }
 
 function stamp() {
@@ -993,6 +1043,7 @@ const typingIn = id => $(id).contains(document.activeElement);
 
 async function refresh() {
   if (polling || !session || $("app").hidden || $("save").disabled) return;
+  if (ROLE==="staff") return refreshStaff();
   polling = true;
 
   try {
@@ -1024,7 +1075,7 @@ async function refresh() {
     });
 
     let skipped = false;
-    renderBookings();
+    if (typingIn("bview")) skipped = true; else renderBookings();
     renderHours();
 
     if (typingIn("slist")) skipped = true; else renderServices();
@@ -1046,11 +1097,18 @@ window.addEventListener("focus", refresh);
 /* ---------- 登入 / 修改密碼 ---------- */
 
 async function enterApp() {
-  await load();
+  const w = await api("whoami");
+  ROLE = w.role || "boss";
+  MYNAME = w.name || "";
+
+  if (ROLE==="staff") await loadStaff();
+  else await load();
+
   $("login").hidden = true;
   $("pwscreen").hidden = true;
   $("app").hidden = false;
-  setTab("bookings");
+  applyRole();
+  setTab(ROLE_TABS[ROLE][0]);
 }
 
 async function login() {
@@ -1060,7 +1118,8 @@ async function login() {
   $("go").disabled = true;
   $("lerr").textContent = "";
   try {
-    const r = await post("login",{pw:typed});
+    const account = $("acct").value.trim();
+    const r = await post("login",{pw:typed,account});
     if (!r.ok) {
       showLoginErr(r);
       $("go").disabled = false;
@@ -1069,6 +1128,7 @@ async function login() {
 
     setSession(r.session);
     $("pw").value = "";
+    try { localStorage.setItem("acct",account); } catch(e) {}
 
     if (r.mustChange) {
       // 還在用預設密碼：必須先修改才能使用後台
@@ -1108,7 +1168,7 @@ function openPwScreen(o) {
 
   $("pwtitle").textContent = PW.forced ? "請先修改密碼" : "修改密碼";
   $("pwhint").textContent = PW.forced
-    ? "你正在使用預設密碼，請設定一組新的後台密碼。"
+    ? "你正在使用初始密碼，請設定一組新的密碼。"
     : "";
   $("pw-old-wrap").hidden = PW.forced;
   $("pw-code-wrap").hidden = !PW.needCode;
@@ -1153,6 +1213,8 @@ $("pw-save").onclick = async () => {
   b.disabled = false;
 };
 
+try { $("acct").value = localStorage.getItem("acct") || ""; } catch(e) {}
+
 $("go").onclick = login;
 $("pw").onkeydown = e => {
   if (e.key === "Enter") login();
@@ -1172,7 +1234,7 @@ function setTab(t) {
   document.querySelectorAll("#tabs .pill").forEach(x=>{
     x.classList.toggle("on",x.dataset.t===t);
   });
-  ["bookings","hours","services","members","settings"].forEach(k=>{
+  ["bookings","hours","services","members","settings","myfree","myjobs"].forEach(k=>{
     $("p-"+k).hidden = k!==t;
   });
   $("title").textContent = TITLES[t][0];
@@ -1204,6 +1266,37 @@ function bkByDate() {
 const pkey = p => String(p||"").replace(/\D/g,"").replace(/^0+/,"");
 const memberOf = p => S.members.find(m=>pkey(m["電話"])===pkey(p));
 const PAYS = ["刷卡","現金","轉帳"];
+const sameAcct = (a,b) => String(a||"").trim().toLowerCase()===String(b||"").trim().toLowerCase();
+
+// 這位員工有沒有標示這個預約的開始時間有空（只是提示，指派時後端會再完整檢查）
+const staffFree = (acct,b) => (S.avail||[]).some(a=>a.date===b["日期"]&&sameAcct(a.account,acct)&&a.slots.split(",").includes(b["時間"]));
+
+function assignRow(b,id,st) {
+  const off = st==="已取消" ? "disabled" : "";
+  const staff = S.staff||[], rooms = S.rooms||[];
+  let html = "";
+
+  if (staff.length) {
+    const cur = b["教練帳號"];
+    const known = staff.some(s=>sameAcct(s.account,cur));
+    html += `<select data-coach="${id}" ${off}>
+      <option value="">未指派教練</option>
+      ${cur&&!known?`<option value="${esc(cur)}" selected>${esc(b["教練"]||cur)}（已停用）</option>`:""}
+      ${staff.map(s=>`<option value="${esc(s.account)}" ${sameAcct(s.account,cur)?"selected":""}>${esc(s.name)}${staffFree(s.account,b)?"（有空）":""}</option>`).join("")}
+    </select>`;
+  }
+
+  if (rooms.length) {
+    const cur = String(b["教室"]||"");
+    html += `<select data-room="${id}" ${off}>
+      <option value="">未指定教室</option>
+      ${cur&&!rooms.includes(cur)?`<option selected>${esc(cur)}</option>`:""}
+      ${rooms.map(r=>`<option ${r===cur?"selected":""}>${esc(r)}</option>`).join("")}
+    </select>`;
+  }
+
+  return html ? `<div class="row" style="margin-top:8px">${html}</div>` : "";
+}
 
 function bkCard(b) {
   const st=b["狀態"], id=esc(b["預約編號"]);
@@ -1230,6 +1323,7 @@ function bkCard(b) {
       <button class="b sm d" data-act="no" data-id="${id}" ${st==="已取消"?"disabled":""}>取消</button>
       ${pay}
     </div>
+    ${assignRow(b,id,st)}
   </div>`;
 }
 
@@ -1270,6 +1364,69 @@ function renderBookings() {
 
   $("blabel").textContent=label;
   $("bview").innerHTML=html;
+  renderStaffInfo();
+}
+
+function renderStaffInfo() {
+  const box=$("bstaff");
+  const ds=V.mode==="day"?V.cur:(V.mode==="month"?V.sel:"");
+  const staff=S.staff||[];
+
+  if (!ds||!staff.length) { box.hidden=true; return; }
+
+  const day=S.bookings.filter(b=>b["日期"]===ds&&b["狀態"]!=="已取消");
+  const open=S.hours.some(h=>h.date===ds&&h.slots);
+
+  if (!open&&!day.length) { box.hidden=true; return; }
+
+  const rows=staff.map(s=>{
+    const a=(S.avail||[]).find(x=>x.date===ds&&sameAcct(x.account,s.account));
+    const slots=a&&a.slots?a.slots.split(","):[];
+    const n=day.filter(b=>sameAcct(b["教練帳號"],s.account)).length;
+    return `<div class="row sp" style="margin:6px 0"><b>${esc(s.name)}</b><span class="mute">${slots.length?esc(slots.join("、")):"未填／沒空"}${n?`　已排 ${n} 堂`:""}</span></div>`;
+  }).join("");
+
+  const un=day.filter(b=>!String(b["教練帳號"]||"").trim()).length;
+
+  box.hidden=false;
+  box.innerHTML=`<div class="row sp"><b>${md(ds)} 員工空檔</b><span class="mute">${un?`還有 ${un} 筆未指派教練`:"全部已指派"}</span></div>${rows}`;
+}
+
+async function assignCoachUI(id,account,force) {
+  const bk=S.bookings.find(x=>String(x["預約編號"])===id);
+
+  try {
+    const r=await api("assignCoach",{id,account,force:!!force});
+
+    if (r.needConfirm) {
+      if (confirm(r.message+"\n\n仍要指派嗎？")) return assignCoachUI(id,account,true);
+      renderBookings();
+      return;
+    }
+
+    const st=(S.staff||[]).find(s=>sameAcct(s.account,account));
+    bk["教練帳號"]=account;
+    bk["教練"]=st?st.name:"";
+    renderBookings();
+    toast(account?`已指派給 ${st?st.name:account}`:"已取消指派");
+  } catch(err) {
+    toast(err.message);
+    renderBookings();
+  }
+}
+
+async function assignRoomUI(id,room) {
+  const bk=S.bookings.find(x=>String(x["預約編號"])===id);
+
+  try {
+    await api("assignRoom",{id,room});
+    bk["教室"]=room;
+    renderBookings();
+    toast(room?`已調整到 ${room}`:"已清除教室");
+  } catch(err) {
+    toast(err.message);
+    renderBookings();
+  }
 }
 
 function shift(n) {
@@ -1340,6 +1497,12 @@ $("bview").onclick=async e=>{
 };
 
 $("bview").onchange=async e=>{
+  const c=e.target.closest("select[data-coach]");
+  if (c) return assignCoachUI(c.dataset.coach,c.value);
+
+  const rm=e.target.closest("select[data-room]");
+  if (rm) return assignRoomUI(rm.dataset.room,rm.value);
+
   const s=e.target.closest("select[data-pay]");
   if (!s) return;
 
@@ -1772,7 +1935,10 @@ $("sReset").onclick = async () => {
 function updBar() {
   const bar=$("bar"),b=$("save");
 
-  if (tab==="hours"&&dirty.size) {
+  if (tab==="myfree"&&ST.dirty.size) {
+    bar.hidden=false;
+    b.textContent=`儲存我的空檔（${ST.dirty.size} 天）`;
+  } else if (tab==="hours"&&dirty.size) {
     bar.hidden=false;
     b.textContent=`儲存營業時間（${dirty.size} 天）`;
   } else if (tab==="services"&&svcNorm(svc)!==svcNorm(S.services)) {
@@ -1788,7 +1954,10 @@ $("save").onclick=async()=>{
   b.disabled=true;
 
   try {
-    if (tab==="hours") {
+    if (tab==="myfree") {
+      await api("saveMyAvail",{rows:[...ST.dirty].map(([date,slots])=>({date,slots}))});
+      ST.dirty.clear();
+    } else if (tab==="hours") {
       await api("saveHours",{rows:[...dirty.values()]});
       dirty.clear();
     } else {
@@ -1802,7 +1971,7 @@ $("save").onclick=async()=>{
       });
     }
 
-    await load();
+    if (ROLE==="staff") await loadStaff(); else await load();
     toast("已儲存");
   } catch(e) {
     toast(e.message);
@@ -1810,6 +1979,162 @@ $("save").onclick=async()=>{
 
   b.disabled=false;
   updBar();
+};
+
+/* ---------- 員工：我的空檔／我的課表 ---------- */
+const ST = {hours:[],mine:[],assigned:[],ms:mStart(today()),sel:"",dirty:new Map()};
+
+async function loadStaff() {
+  const j = await api("getStaffView");
+  ST.hours = j.hours;
+  ST.mine = j.mine;
+  ST.assigned = j.assigned;
+  lastSig = JSON.stringify([j.hours,j.mine,j.assigned]);
+  renderStaff();
+  stamp();
+}
+
+async function refreshStaff() {
+  polling = true;
+
+  try {
+    const j = await api("getStaffView");
+    const s = JSON.stringify([j.hours,j.mine,j.assigned]);
+    stamp();
+
+    if (s !== lastSig) {
+      const had = new Set(ST.assigned.map(a=>a.date+a.time+a.name));
+      const fresh = j.assigned.filter(a=>!had.has(a.date+a.time+a.name));
+      if (fresh.length) toast(`有新課指派給你：${md(fresh[0].date)} ${fresh[0].time}`);
+
+      ST.hours = j.hours;
+      ST.assigned = j.assigned;
+      if (!ST.dirty.size) ST.mine = j.mine;   // 有尚未儲存的修改時，不蓋掉
+      renderStaff();
+      lastSig = s;
+    }
+  } catch(e) {
+    // 背景同步失敗不打擾，下一輪再試
+  }
+
+  polling = false;
+}
+
+const stBiz = ds => { const h=ST.hours.find(x=>x.date===ds); return h&&h.slots?h.slots.split(","):[]; };
+const stSaved = ds => (ST.mine.find(m=>m.date===ds)||{}).slots||"";
+const stSlots = ds => { const v=ST.dirty.has(ds)?ST.dirty.get(ds):stSaved(ds); return v?v.split(","):[]; };
+
+function stSet(ds,slots) {
+  const v=[...new Set(slots)].sort().join(",");
+  if (v===stSaved(ds)) ST.dirty.delete(ds);
+  else ST.dirty.set(ds,v);
+}
+
+function renderStaff() {
+  renderStaffGrid();
+  renderStaffEd();
+  renderJobs();
+  updBar();
+}
+
+function renderStaffGrid() {
+  const t=today();
+
+  $("flabel").textContent=mLabel(ST.ms);
+  $("fp").disabled=ST.ms<=mStart(t);
+
+  let g=WN.split("").map(c=>`<div class="wh">${c}</div>`).join("")
+    +"<div></div>".repeat(wd(ST.ms));
+
+  for (let d=1;d<=mDays(ST.ms);d++) {
+    const ds=dayOf(ST.ms,d), biz=stBiz(ds), n=stSlots(ds).length;
+    const off=ds<t||!biz.length;
+    g+=`<button class="c ${ds===t?"today":""} ${ds===ST.sel?"sel":""} ${ST.dirty.has(ds)?"dy":""}" data-d="${ds}" ${off?"disabled":""}><b>${d}</b><i>${biz.length&&n?n:""}</i></button>`;
+  }
+
+  $("fgrid").innerHTML=`<div class="grid">${g}</div>`;
+}
+
+function renderStaffEd() {
+  const biz=ST.sel?stBiz(ST.sel):[];
+
+  $("fed").hidden=!biz.length;
+  if (!biz.length) return;
+
+  const mine=new Set(stSlots(ST.sel));
+
+  $("fdate").textContent=`${md(ST.sel)} 我有空的時段`;
+  $("fchips").innerHTML=biz.map(s=>`<button class="chip ${mine.has(s)?"on":""}" data-t="${s}">${s}</button>`).join("");
+}
+
+function renderJobs() {
+  const a=ST.assigned;
+
+  if (!a.length) {
+    $("jlist").innerHTML='<p class="mute none">目前沒有指派給你的課。</p>';
+    return;
+  }
+
+  let html="", cur="";
+
+  a.forEach(x=>{
+    if (x.date!==cur) {
+      cur=x.date;
+      html+=`<div class="dh ${x.date===today()?"now":""}" style="${html?"":"margin-top:0"}">${md(x.date)}</div>`;
+    }
+
+    html+=`<div class="bk">
+      <div class="row sp">
+        <b>${esc(x.time)}　${esc(String(x.service).replace(/^(體驗課|正式課程)[｜|]\s*/,""))}</b>
+        <span class="tag t-${esc(x.status)}">${esc(x.status)}</span>
+      </div>
+      <div>${esc(x.name)}${x.room?"・"+esc(x.room):""}</div>
+    </div>`;
+  });
+
+  $("jlist").innerHTML=html;
+}
+
+$("fp").onclick=()=>{ ST.ms=addMonth(ST.ms,-1); ST.sel=""; renderStaff(); };
+$("fn").onclick=()=>{ ST.ms=addMonth(ST.ms,1); ST.sel=""; renderStaff(); };
+
+$("fgrid").onclick=e=>{
+  const b=e.target.closest("button[data-d]");
+  if (!b) return;
+  ST.sel=b.dataset.d;
+  renderStaffGrid();
+  renderStaffEd();
+};
+
+$("fchips").onclick=e=>{
+  const b=e.target.closest("button[data-t]");
+  if (!b||!ST.sel) return;
+
+  const s=new Set(stSlots(ST.sel));
+  if (s.has(b.dataset.t)) s.delete(b.dataset.t); else s.add(b.dataset.t);
+
+  stSet(ST.sel,[...s]);
+  renderStaff();
+};
+
+$("fAll").onclick=()=>{ if (!ST.sel) return; stSet(ST.sel,stBiz(ST.sel)); renderStaff(); };
+$("fNone").onclick=()=>{ if (!ST.sel) return; stSet(ST.sel,[]); renderStaff(); };
+
+$("fCopy").onclick=()=>{
+  if (!ST.sel) return;
+
+  const pick=stSlots(ST.sel), t=today();
+  let n=0;
+
+  for (let d=1;d<=mDays(ST.ms);d++) {
+    const ds=dayOf(ST.ms,d), biz=stBiz(ds);
+    if (ds<t||!biz.length) continue;
+    stSet(ds,pick.filter(s=>biz.includes(s)));
+    n++;
+  }
+
+  renderStaff();
+  toast(`已套用到本月 ${n} 個營業日，記得按下方儲存`);
 };
 
 function renderAll() {

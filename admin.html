@@ -705,7 +705,7 @@ a {
   </div>
 
   <div id="testbar" hidden style="margin:0 0 14px;padding:9px 14px;border:1px solid var(--warn);border-radius:12px;color:var(--warn);font-size:13px">
-    測試模式：目前是用「測試用登入密碼」登入。測試完請到「系統設定」清除該密碼。
+    萬用密碼登入中（開發者）：可使用「系統設定」，客戶看不到這個分頁。
   </div>
 
   <h1 id="title"></h1>
@@ -717,7 +717,7 @@ a {
     <button class="pill" data-t="hours">營業時間</button>
     <button class="pill" data-t="services">服務項目</button>
     <button class="pill" data-t="members">會員資料</button>
-    <button class="pill" data-t="settings">系統設定</button>
+    <button class="pill" data-t="settings" id="tabSettings" hidden>系統設定</button>
   </div>
 
   <section id="p-bookings">
@@ -816,46 +816,23 @@ a {
 
   <section id="p-settings" hidden>
 
-    <div class="card" id="slock">
-      <p class="mute" style="margin:0 0 12px">
-        這一區是管理員專用，需要另一組「管理員密碼」（和後台登入密碼不同）。離開這個分頁會自動上鎖。
+    <div class="card">
+      <p class="mute" style="margin:0">
+        這個分頁只有用萬用密碼（TEST_PASSWORD）登入才看得到，客戶看不到。
+        這裡只能寫入後台這個專案的指令碼屬性，內容只寫入、不會再顯示完整值；
+        前台專案（CHANNEL_ACCESS_TOKEN 等）是另一個 GAS 專案，請在它自己的「專案設定」修改。
       </p>
-      <div class="row">
-        <input id="spw" type="password" class="w" placeholder="管理員密碼" autocomplete="off">
-        <button class="b" id="sUnlock">解鎖</button>
-      </div>
     </div>
 
-    <div id="sopen" hidden>
-      <div class="card">
-        <div class="row sp">
-          <p class="mute" style="margin:0;flex:1 1 220px">
-            只能寫入後台這個專案的指令碼屬性，內容只寫入、不會再顯示完整值。解鎖 30 分鐘後自動上鎖。
-            前台專案（CHANNEL_ACCESS_TOKEN 等）是另一個 GAS 專案，請在它自己的「專案設定」修改。
-          </p>
-          <button class="b g sm" id="sLock">立即上鎖</button>
-        </div>
-      </div>
+    <div id="plist"></div>
 
-      <div id="plist"></div>
-
-      <div class="card">
-        <b>重置後台登入密碼</b>
-        <p class="mute" style="margin:4px 0 12px">
-          把後台登入密碼重置為初始密碼 12345，讓客戶重新用 12345 登入並自行修改。
-          第一次修改時需要試算表「後台設定」分頁 B1 的設定碼。重置後，目前登入中的人會被登出。
-        </p>
-        <button class="b g sm d" id="sReset">重置為初始密碼 12345</button>
-      </div>
-
-      <div class="card">
-        <b>修改管理員密碼</b>
-        <p class="mute" style="margin:4px 0 12px">至少 10 個字元，不能和後台登入密碼相同。</p>
-        <input id="sOld" type="password" style="width:100%;margin-bottom:10px" placeholder="目前的管理員密碼" autocomplete="off">
-        <input id="sNew" type="password" style="width:100%;margin-bottom:10px" placeholder="新的管理員密碼" autocomplete="new-password">
-        <input id="sNew2" type="password" style="width:100%;margin-bottom:12px" placeholder="再輸入一次新密碼" autocomplete="new-password">
-        <button class="b sm" id="sChg">修改管理員密碼</button>
-      </div>
+    <div class="card">
+      <b>重置客戶的後台登入密碼</b>
+      <p class="mute" style="margin:4px 0 12px">
+        把客戶的後台登入密碼重置為初始密碼 12345，客戶重新用 12345 登入並自行修改。
+        第一次修改時需要試算表「後台設定」分頁 B1 的設定碼。重置後，客戶目前的登入會被登出。
+      </p>
+      <button class="b g sm d" id="sReset">重置為初始密碼 12345</button>
     </div>
 
   </section>
@@ -910,7 +887,6 @@ try {
   sessionStorage.removeItem("pw"); // 清掉舊版存的明文密碼
 } catch(e) {}
 
-let superToken = "";
 let S = {hours:[],services:[],bookings:[],members:[]};
 let svc = [], dirty = new Map(), tab = "bookings", tt;
 
@@ -946,12 +922,8 @@ async function post(action,data={}) {
 
 // 帶 session 的請求；過期或被要求先改密碼時回到登入頁
 async function api(action,data={}) {
-  const j = await post(action,{session,superToken,...data});
+  const j = await post(action,{session,...data});
   if (!j.ok) {
-    if (j.code === "SUPER_EXPIRED") {
-      superToken = "";
-      showSettingsLock();
-    }
     if (j.code === "SESSION_EXPIRED" || j.code === "MUST_CHANGE") {
       dropSession();
       showLogin();
@@ -981,6 +953,13 @@ function showLogin() {
 const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members]);
 let lastSig = "", lastIds = null, polling = false;
 
+/* 兩種身分：客戶 / 萬用密碼（開發者）。只有萬用身分看得到「系統設定」 */
+function applyRole() {
+  $("testbar").hidden = !S.testMode;
+  $("tabSettings").hidden = !S.testMode;
+  if (!S.testMode && tab==="settings") setTab("bookings");
+}
+
 function stamp() {
   $("synced").textContent = "即時同步中・最後更新 " +
     new Date().toLocaleTimeString("zh-TW",{hour12:false,timeZone:"Asia/Taipei"});
@@ -993,7 +972,7 @@ async function load() {
   lastIds = new Set(S.bookings.map(b=>String(b["預約編號"])));
   renderAll();
   stamp();
-  $("testbar").hidden = !S.testMode;
+  applyRole();
 }
 
 /* 即時同步：每 30 秒（頁面開著時）＋切回頁面時重新讀取；
@@ -1021,7 +1000,7 @@ async function refresh() {
 
     const prevServices = S.services;
     S = j;
-    $("testbar").hidden = !S.testMode;
+    applyRole();
 
     // 服務項目：有未儲存的修改就保留你的版本
     if (svcNorm(svc)===svcNorm(prevServices)) svc = j.services.map(x=>({...x}));
@@ -1168,8 +1147,7 @@ function setTab(t) {
   $("title").textContent = TITLES[t][0];
   $("subt").textContent = TITLES[t][1];
   updBar();
-  superToken = "";          // 離開設定頁（或重新進入）一律重新上鎖
-  showSettingsLock();
+  if (t==="settings") loadProps();
 }
 
 $("tabs").onclick = e => {
@@ -1695,38 +1673,7 @@ $("mAdd").onclick=async()=>{
   b.disabled=false;
 };
 
-/* 系統設定：管理員寫入指令碼屬性（需要獨立的管理員密碼） */
-function showSettingsLock() {
-  $("slock").hidden = false;
-  $("sopen").hidden = true;
-  $("spw").value = "";
-  ["sOld","sNew","sNew2"].forEach(id => $(id).value = "");
-}
-
-async function unlockSettings() {
-  const pw = $("spw").value;
-  if (!pw) return toast("請輸入管理員密碼");
-
-  $("sUnlock").disabled = true;
-  try {
-    const r = await post("superLogin",{session,superPw:pw});
-    if (!r.ok) throw new Error(r.error || "解鎖失敗");
-
-    superToken = r.superToken;
-    $("spw").value = "";
-    $("slock").hidden = true;
-    $("sopen").hidden = false;
-    await loadProps();
-  } catch(e) {
-    toast(e.message);
-  }
-  $("sUnlock").disabled = false;
-}
-
-$("sUnlock").onclick = unlockSettings;
-$("spw").onkeydown = e => { if (e.key === "Enter") unlockSettings(); };
-$("sLock").onclick = () => { superToken = ""; showSettingsLock(); };
-
+/* 系統設定（只有萬用密碼登入看得到） */
 async function loadProps() {
   try {
     const j = await api("getProps");
@@ -1775,37 +1722,14 @@ $("plist").onclick = async e => {
 };
 
 $("sReset").onclick = async () => {
-  if (!confirm("確定把後台登入密碼重置為初始密碼 12345？\n\n客戶下次要用 12345 登入並修改密碼（需要試算表「後台設定」B1 的設定碼）。\n目前登入中的人會被登出。")) return;
+  if (!confirm("確定把客戶的後台登入密碼重置為初始密碼 12345？\n\n客戶下次要用 12345 登入並修改密碼（需要試算表「後台設定」B1 的設定碼）。\n客戶目前的登入會被登出。")) return;
 
   const b = $("sReset");
   b.disabled = true;
 
   try {
     await api("resetStaffPassword");
-    superToken = "";
-    dropSession();
-    showLogin();
-    toast("已重置，請用初始密碼 12345 登入並修改");
-  } catch(e) {
-    toast(e.message);
-  }
-
-  b.disabled = false;
-};
-
-$("sChg").onclick = async () => {
-  const b = $("sChg");
-  b.disabled = true;
-
-  try {
-    const r = await api("changeSuperPassword",{
-      oldPassword: $("sOld").value,
-      newPassword: $("sNew").value,
-      confirm: $("sNew2").value
-    });
-    superToken = r.superToken;
-    ["sOld","sNew","sNew2"].forEach(id => $(id).value = "");
-    toast("管理員密碼已更新");
+    toast("已重置，客戶可用初始密碼 12345 登入並修改");
   } catch(e) {
     toast(e.message);
   }

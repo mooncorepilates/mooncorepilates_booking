@@ -658,7 +658,7 @@ a {
   <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
   <div class="card" style="margin-top:28px">
     <p class="mute" style="margin-top:0">登入後台</p>
-    <input id="acct" type="text" style="width:100%;margin-bottom:10px" placeholder="帳號（老闆用主密碼登入可不填）" autocomplete="username" autocapitalize="none" spellcheck="false">
+    <input id="acct" type="text" style="width:100%;margin-bottom:10px" placeholder="帳號" autocomplete="username" autocapitalize="none" spellcheck="false">
     <div class="row">
       <input id="pw" type="password" class="w" placeholder="密碼" autocomplete="current-password">
       <button class="b" id="go">登入</button>
@@ -718,8 +718,10 @@ a {
   <div class="pills" id="tabs">
     <button class="pill on" data-t="bookings">預約系統</button>
     <button class="pill" data-t="hours">營業時間</button>
+    <button class="pill" data-t="rentals">場租</button>
     <button class="pill" data-t="services">服務項目</button>
     <button class="pill" data-t="members">會員資料</button>
+    <button class="pill" data-t="staff">員工</button>
     <button class="pill" data-t="myfree" hidden>我的空檔</button>
     <button class="pill" data-t="myjobs" hidden>我的課表</button>
     <button class="pill" data-t="settings" id="tabSettings" hidden>系統設定</button>
@@ -750,6 +752,7 @@ a {
       <button class="r" id="bn" aria-label="下一個">›</button>
     </div>
 
+    <div class="card" id="brent" hidden></div>
     <div class="card" id="bstaff" hidden></div>
     <div class="card" id="bview"></div>
   </section>
@@ -820,6 +823,80 @@ a {
     <div id="mlist"></div>
   </section>
 
+  <section id="p-rentals" hidden>
+    <div class="card">
+      <b>新增場租</b>
+      <p class="mute" style="margin:4px 0 12px">登記後，那間教室在這段時間不會再被客戶預約。</p>
+
+      <div class="row">
+        <select id="rtRoom"></select>
+        <input id="rtDate" type="date">
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <input id="rtStart" type="time" aria-label="開始時間">
+        <span class="mute">到</span>
+        <input id="rtEnd" type="time" aria-label="結束時間">
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <input id="rtRenter" class="w" placeholder="租借人" maxlength="40" autocomplete="off">
+        <input id="rtAmount" class="w" type="number" inputmode="numeric" min="0" placeholder="金額">
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <select id="rtPay">
+          <option value="">未收款</option>
+          <option>刷卡</option>
+          <option>現金</option>
+          <option>轉帳</option>
+        </select>
+        <input id="rtNote" class="w" placeholder="備註（選填）" maxlength="200" autocomplete="off">
+      </div>
+
+      <button class="b" id="rtAdd" style="margin-top:14px">新增場租</button>
+    </div>
+
+    <div class="row sp" style="margin:18px 0 8px">
+      <b>場租紀錄</b>
+      <label class="mute" style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <input type="checkbox" id="rtAll"> 顯示已取消與過去的
+      </label>
+    </div>
+    <div class="card" id="rtList"></div>
+  </section>
+
+  <section id="p-staff" hidden>
+    <div class="card">
+      <b>新增員工</b>
+
+      <div class="row" style="margin-top:12px">
+        <input id="nsAcc" class="w" placeholder="帳號（英文或數字，例如 amy）" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="40">
+        <input id="nsName" class="w" placeholder="姓名" maxlength="30" autocomplete="off">
+      </div>
+
+      <div class="row" style="margin-top:10px">
+        <select id="nsRole">
+          <option>員工</option>
+          <option>管理員</option>
+        </select>
+        <input id="nsPw" class="w" placeholder="初始密碼（至少 6 個字元）" autocomplete="off" spellcheck="false">
+        <button class="b g sm" id="nsGen" type="button">產生</button>
+      </div>
+
+      <p class="mute" style="margin:10px 0 12px">
+        員工只能填自己的空檔、看被指派給自己的課；角色選「管理員」則和你有相同權限。
+        初始密碼只有新增（或重設）當下看得到，請直接交給對方，對方第一次登入後必須自己改密碼。
+      </p>
+
+      <button class="b" id="nsAdd">新增員工</button>
+    </div>
+
+    <div class="card" id="nsDone" hidden style="white-space:pre-line;line-height:1.8"></div>
+
+    <div id="stlist"></div>
+  </section>
+
   <section id="p-myfree" hidden>
     <div class="card">
       <div class="nav" style="margin-top:0">
@@ -829,7 +906,7 @@ a {
       </div>
       <div id="fgrid"></div>
       <p class="mute" style="margin:12px 0 0">
-        灰色日期＝老闆還沒開放營業時間。格子上的數字是你當天標示有空的時段數，底線是尚未儲存。
+        灰色日期＝管理員還沒開放營業時間。格子上的數字是你當天標示有空的時段數，底線是尚未儲存。
       </p>
     </div>
 
@@ -881,7 +958,7 @@ a {
 </main>
 
 <script>
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzTWCIOXxicuk7BFEtmSlzHcVKZVp2UjKjCrfhRb-HzDVKznjj-Oy23_ucou7HxcMdw/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyowZ3EXmAyImLihpeBhn9wf7gqg29unT4zWZtfycsoB58IX_pFz2Fr9GWqOpRm1plBXQ/exec";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -922,7 +999,7 @@ try {
   sessionStorage.removeItem("pw"); // 清掉舊版存的明文密碼
 } catch(e) {}
 
-let ROLE = "boss", MYNAME = "";
+let ROLE = "boss", MYNAME = "", MYACC = "";
 let S = {hours:[],services:[],bookings:[],members:[]};
 let svc = [], dirty = new Map(), tab = "bookings", tt;
 
@@ -932,8 +1009,10 @@ const TITLES = {
   services:["服務項目","調整體驗課與正式課程的價格、時長；不再提供的課程可以停用或刪除。包堂方案請在試算表「課程方案」分頁調整。"],
   members:["會員資料","學員的聯絡方式、購買／已上／剩餘堂數，以及你自己的備註。"],
   settings:["系統設定","管理員專用：寫入通知用的金鑰（指令碼屬性）。"],
-  myfree:["我的空檔","點選日期，標示你那天哪些時段有空；老闆會依這裡分配課程。"],
-  myjobs:["我的課表","老闆指派給你的課程。"]
+  rentals:["場租","登記教室出租：登記後那間教室在該時段不會再被客戶預約。"],
+  staff:["員工","新增員工帳號、改姓名、停用或重設密碼。員工第一次用初始密碼登入後要自己改密碼。"],
+  myfree:["我的空檔","點選日期，標示你那天哪些時段有空；管理員會依這裡分配課程。"],
+  myjobs:["我的課表","管理員指派給你的課程。"]
 };
 
 function toast(m) {
@@ -998,13 +1077,13 @@ function showLogin() {
   $("pw").value = "";
 }
 
-const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members,j.staff,j.avail,j.rooms]);
+const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members,j.staff,j.avail,j.rooms,j.rentals]);
 let lastSig = "", lastIds = null, polling = false;
 
-/* 身分：老闆 / 員工 / 萬用密碼（開發者）。每種身分只看得到自己的分頁 */
+/* 身分：管理員 / 員工 / 萬用密碼（開發者）。每種身分只看得到自己的分頁 */
 const ROLE_TABS = {
-  boss:["bookings","hours","services","members"],
-  master:["bookings","hours","services","members","settings"],
+  boss:["bookings","hours","rentals","services","members","staff"],
+  master:["bookings","hours","rentals","services","members","staff","settings"],
   staff:["myfree","myjobs"]
 };
 
@@ -1016,7 +1095,7 @@ function applyRole() {
     p.hidden = !tabs.includes(p.dataset.t);
   });
 
-  $("whoname").textContent = ROLE==="master" ? "" : (MYNAME ? MYNAME+(ROLE==="staff"?"（員工）":"（老闆）") : "");
+  $("whoname").textContent = ROLE==="master" ? "" : (MYNAME ? MYNAME+(ROLE==="staff"?"（員工）":"（管理員）") : "");
 
   if (!tabs.includes(tab)) setTab(tabs[0]);
 }
@@ -1078,6 +1157,7 @@ async function refresh() {
     if (typingIn("bview")) skipped = true; else renderBookings();
     renderHours();
 
+    if (typingIn("p-rentals")) skipped = true; else renderRentals();
     if (typingIn("slist")) skipped = true; else renderServices();
     if (typingIn("p-members")) skipped = true; else renderMembers();
 
@@ -1100,6 +1180,7 @@ async function enterApp() {
   const w = await api("whoami");
   ROLE = w.role || "boss";
   MYNAME = w.name || "";
+  MYACC = w.account || "";
 
   if (ROLE==="staff") await loadStaff();
   else await load();
@@ -1234,13 +1315,15 @@ function setTab(t) {
   document.querySelectorAll("#tabs .pill").forEach(x=>{
     x.classList.toggle("on",x.dataset.t===t);
   });
-  ["bookings","hours","services","members","settings","myfree","myjobs"].forEach(k=>{
+  ["bookings","hours","rentals","services","members","staff","settings","myfree","myjobs"].forEach(k=>{
     $("p-"+k).hidden = k!==t;
   });
   $("title").textContent = TITLES[t][0];
   $("subt").textContent = TITLES[t][1];
   updBar();
   if (t==="settings") loadProps();
+  if (t==="staff") loadStaffList();
+  if (t==="rentals") initRentalForm();
 }
 
 $("tabs").onclick = e => {
@@ -1365,6 +1448,18 @@ function renderBookings() {
   $("blabel").textContent=label;
   $("bview").innerHTML=html;
   renderStaffInfo();
+  renderRentalInfo();
+}
+
+function renderRentalInfo() {
+  const box=$("brent");
+  const ds=V.mode==="day"?V.cur:(V.mode==="month"?V.sel:"");
+  const list=ds?(S.rentals||[]).filter(x=>x.date===ds&&x.status!=="已取消"):[];
+
+  if (!list.length) { box.hidden=true; return; }
+
+  box.hidden=false;
+  box.innerHTML=`<b>${md(ds)} 場租</b>`+list.map(x=>`<div class="row sp" style="margin:6px 0"><span>${esc(x.start)}–${esc(x.end)}　${esc(x.room)}</span><span class="mute">${esc(x.renter)}</span></div>`).join("");
 }
 
 function renderStaffInfo() {
@@ -1981,6 +2076,247 @@ $("save").onclick=async()=>{
   updBar();
 };
 
+/* ---------- 管理員：場租 ---------- */
+function initRentalForm() {
+  renderRentals();
+  if (!$("rtDate").value) $("rtDate").value=today();
+  $("rtDate").min=today();
+}
+
+function renderRentals() {
+  // 教室選單（內容沒變就不重建，避免打字時選項被重設）
+  const opts=(S.rooms||[]).map(r=>`<option>${esc(r)}</option>`).join("");
+  if ($("rtRoom").dataset.opts!==opts) {
+    const keep=$("rtRoom").value;
+    $("rtRoom").innerHTML=opts;
+    $("rtRoom").dataset.opts=opts;
+    if (keep) $("rtRoom").value=keep;
+  }
+
+  const all=$("rtAll").checked, t=today();
+  const list=(S.rentals||[])
+    .filter(x=>all||(x.status!=="已取消"&&x.date>=t))
+    .sort((a,b)=>(a.date+a.start).localeCompare(b.date+b.start));
+
+  if (!list.length) {
+    $("rtList").innerHTML='<p class="mute none">目前沒有場租紀錄。</p>';
+    return;
+  }
+
+  let html="", cur="";
+
+  list.forEach(x=>{
+    const off=x.status==="已取消";
+
+    if (x.date!==cur) {
+      cur=x.date;
+      html+=`<div class="dh ${x.date===t?"now":""}" style="${html?"":"margin-top:0"}">${md(x.date)}</div>`;
+    }
+
+    html+=`<div class="bk ${off?"x":""}">
+      <div class="row sp">
+        <b>${esc(x.start)}–${esc(x.end)}　${esc(x.room)}</b>
+        <span class="tag ${off?"t-已取消":"t-已預約"}">${off?"已取消":"有效"}</span>
+      </div>
+      <div>${esc(x.renter)}・$${esc(x.amount)}${x.note?"・"+esc(x.note):""}</div>
+      <div class="row" style="margin-top:10px">
+        <select data-rpay="${esc(x.id)}" ${off?"disabled":""}>
+          <option value="">未收款</option>
+          ${PAYS.map(p=>`<option ${x.method===p?"selected":""}>${p}</option>`).join("")}
+        </select>
+        <button class="b sm d" data-rcancel="${esc(x.id)}" ${off?"disabled":""}>取消場租</button>
+      </div>
+    </div>`;
+  });
+
+  $("rtList").innerHTML=html;
+}
+
+$("rtAll").onchange=renderRentals;
+
+$("rtAdd").onclick=async()=>{
+  const body={
+    room:$("rtRoom").value,
+    date:$("rtDate").value,
+    start:$("rtStart").value,
+    end:$("rtEnd").value,
+    renter:$("rtRenter").value.trim(),
+    amount:$("rtAmount").value,
+    method:$("rtPay").value,
+    note:$("rtNote").value.trim()
+  };
+
+  if (!body.room) return toast("請選擇教室");
+  if (!body.date) return toast("請選擇日期");
+  if (!body.start||!body.end) return toast("請選擇開始與結束時間");
+  if (body.end<=body.start) return toast("結束時間必須晚於開始時間");
+  if (!body.renter) return toast("請輸入租借人");
+  if (body.amount==="") return toast("請輸入金額");
+
+  const b=$("rtAdd");
+  b.disabled=true;
+
+  try {
+    await api("addRental",body);
+    ["rtRenter","rtAmount","rtNote"].forEach(id=>$(id).value="");
+    await load();
+    toast("已登記場租");
+  } catch(err) {
+    toast(err.message);
+  }
+
+  b.disabled=false;
+};
+
+$("rtList").onclick=async e=>{
+  const b=e.target.closest("button[data-rcancel]");
+  if (!b) return;
+
+  const x=(S.rentals||[]).find(r=>String(r.id)===b.dataset.rcancel);
+  if (!x||!confirm(`取消 ${md(x.date)} ${x.start}–${x.end} ${x.room} 的場租（${x.renter}）？\n取消後這間教室就能再被客戶預約。`)) return;
+
+  b.disabled=true;
+  try {
+    await api("cancelRental",{id:x.id});
+    await load();
+    toast("已取消場租");
+  } catch(err) {
+    toast(err.message);
+    b.disabled=false;
+  }
+};
+
+$("rtList").onchange=async e=>{
+  const s=e.target.closest("select[data-rpay]");
+  if (!s) return;
+
+  const x=(S.rentals||[]).find(r=>String(r.id)===s.dataset.rpay);
+
+  try {
+    await api("setRentalPayment",{id:x.id,method:s.value});
+    x.method=s.value;
+    toast(s.value?`已記錄收款：${s.value}`:"已改為未收款");
+  } catch(err) {
+    toast(err.message);
+    s.value=x.method||"";
+  }
+};
+
+/* ---------- 管理員：員工管理 ---------- */
+let STF = [];
+
+const genPw = () => {
+  const c="abcdefghjkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const a=new Uint32Array(8);
+  crypto.getRandomValues(a);
+  return [...a].map(n=>c[n%c.length]).join("");
+};
+
+async function loadStaffList() {
+  $("nsDone").hidden=true;
+  try {
+    const j=await api("listStaff");
+    STF=j.staff;
+    renderStaffList();
+  } catch(e) {
+    toast(e.message);
+  }
+}
+
+const PWTXT={init:"尚未登入（使用初始密碼）",set:"已設定自己的密碼",none:"沒有密碼（無法登入）"};
+
+function renderStaffList() {
+  $("stlist").innerHTML=STF.length?STF.map(s=>{
+    const me=sameAcct(s.account,MYACC);
+
+    return `<div class="card">
+      <div class="row sp">
+        <b>${esc(s.name)}${me?"（你）":""}</b>
+        <span class="tag ${s.active?"t-已預約":"t-已取消"}">${s.active?"啟用":"停用"}</span>
+      </div>
+      <div class="mute" style="margin-top:5px">帳號 ${esc(s.account)}・${esc(s.role)}・${PWTXT[s.pwState]}${s.upcoming?`・未來有 ${s.upcoming} 堂已指派`:""}</div>
+      <div class="row" style="margin-top:10px">
+        <button class="b g sm" data-sact="rename" data-acc="${esc(s.account)}">改姓名</button>
+        ${me?"":`<button class="b g sm" data-sact="reset" data-acc="${esc(s.account)}">重設密碼</button>
+        <button class="b g sm ${s.active?"d":""}" data-sact="toggle" data-acc="${esc(s.account)}">${s.active?"停用":"啟用"}</button>`}
+      </div>
+    </div>`;
+  }).join(""):'<div class="card"><p class="mute none">還沒有員工帳號，請從上方新增。</p></div>';
+}
+
+function showCreds(name,acc,pw,isReset) {
+  const box=$("nsDone");
+  box.hidden=false;
+  box.textContent=`${isReset?"已重設":"已新增"}「${name}」\n帳號：${acc}\n${isReset?"新的":""}初始密碼：${pw}\n請直接把帳號和初始密碼交給對方。對方登入後必須先自己改密碼，之後連你也看不到。`;
+}
+
+$("nsGen").onclick=()=>{ $("nsPw").value=genPw(); };
+
+$("nsAdd").onclick=async()=>{
+  const account=$("nsAcc").value.trim(), name=$("nsName").value.trim();
+  const role=$("nsRole").value, initPw=$("nsPw").value.trim();
+
+  if (!account) return toast("請輸入帳號");
+  if (!name) return toast("請輸入姓名");
+  if (initPw.length<6) return toast("初始密碼至少要 6 個字元");
+
+  const b=$("nsAdd");
+  b.disabled=true;
+
+  try {
+    await api("addStaff",{account,name,role,initPw});
+    showCreds(name,account,initPw,false);
+    ["nsAcc","nsName","nsPw"].forEach(id=>$(id).value="");
+    const j=await api("listStaff");
+    STF=j.staff;
+    renderStaffList();
+    await load();
+  } catch(err) {
+    toast(err.message);
+  }
+
+  b.disabled=false;
+};
+
+$("stlist").onclick=async e=>{
+  const b=e.target.closest("button[data-sact]");
+  if (!b) return;
+
+  const s=STF.find(x=>x.account===b.dataset.acc);
+  if (!s) return;
+
+  b.disabled=true;
+  try {
+    if (b.dataset.sact==="rename") {
+      const v=prompt("新的姓名",s.name);
+      if (v===null||!v.trim()) { b.disabled=false; return; }
+      await api("renameStaff",{account:s.account,name:v.trim()});
+      toast("已更新姓名");
+    } else if (b.dataset.sact==="reset") {
+      const v=prompt(`為「${s.name}」設定新的初始密碼（至少 6 個字元）。\n對方原本的登入會被登出，要用這組密碼重新登入並自己改密碼。`,genPw());
+      if (v===null) { b.disabled=false; return; }
+      const pw=v.trim();
+      if (pw.length<6) { toast("初始密碼至少要 6 個字元"); b.disabled=false; return; }
+      await api("resetStaffPw",{account:s.account,initPw:pw});
+      showCreds(s.name,s.account,pw,true);
+    } else {
+      const to=!s.active;
+      const warn=(!to&&s.upcoming)?`\n\n他未來還有 ${s.upcoming} 堂已指派的課，停用後這些課仍會保留，記得改派給別人。`:"";
+      if (!confirm(`${to?"啟用":"停用"}「${s.name}」？${to?"":"\n停用後他的登入會立刻失效。"}${warn}`)) { b.disabled=false; return; }
+      await api("setStaffStatus",{account:s.account,active:to});
+      toast(to?"已啟用":"已停用");
+    }
+
+    const j=await api("listStaff");
+    STF=j.staff;
+    renderStaffList();
+    await load();
+  } catch(err) {
+    toast(err.message);
+    b.disabled=false;
+  }
+};
+
 /* ---------- 員工：我的空檔／我的課表 ---------- */
 const ST = {hours:[],mine:[],assigned:[],ms:mStart(today()),sel:"",dirty:new Map()};
 
@@ -2139,6 +2475,7 @@ $("fCopy").onclick=()=>{
 
 function renderAll() {
   renderBookings();
+  renderRentals();
   renderHours();
   renderServices();
   renderMembers();

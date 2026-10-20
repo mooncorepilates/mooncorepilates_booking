@@ -1,2052 +1,1869 @@
-/**
- * Admin.gs — 後台管理 API
- *
- * 需要設定的指令碼屬性：
- * LINE_TOKEN        ← Messaging API 的 channel access token（發預約確認用）
- *
- * 後台預設密碼是 12345（見 DEFAULT_PASSWORD），登入後必須先修改。
- * 修改後系統自動寫入：ADMIN_PW_HASH、ADMIN_PW_SALT
- *
- * 選填（舊版）：
- * ADMIN_PASSWORD    ← 設定了就視為已自訂密碼；之後在後台改密碼會自動移除
- *
- * 注意：此專案必須是「綁定試算表」的容器型專案（使用 getActive）。
- *
- * MOON CORE PILATES 版新增：
- * - 課程包（包堂）管理：新增方案、手動調整堂數、新增會員
- * - 取消「課程包扣堂」的預約會自動退回 1 堂
- * - 第一次部署請手動執行一次 setupMoonCoreSheets()，自動補欄位與建立分頁
- * - 預約可標記「已完成」，完成時 LINE 通知學員剩餘堂數
- * - 收款方式（刷卡／現金／轉帳）可在後台填寫
- * - 「系統設定」分頁可由管理員寫入指令碼屬性（LINE_TOKEN），
- *   需要獨立的管理員密碼（第一次執行 initSuperAdminPassword() 產生）
- */
+<!DOCTYPE html>
+<html lang="zh-Hant" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>MOON CORE PILATES｜預約系統管理</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@500;600&display=swap" rel="stylesheet">
 
-var SHEETS = {
-  hours: '營業時間',
-  services: '服務項目',
-  bookings: '預約紀錄',
-  members: '會員資料',
-  plans: '課程方案',
-  purchases: '購買紀錄'
-};
-
-var STATUS_DONE = '已完成';
-
-// 收款方式（預約紀錄的「付款方式」欄、購買紀錄的「付款方式」欄）
-var PAY_METHODS = ['刷卡', '現金', '轉帳'];
-
-// 管理員可以在後台「系統設定」寫入的指令碼屬性（白名單；
-// 密碼雜湊等安全相關的屬性不在名單內，也不會被讀出來）
-var EDITABLE_PROPS = [
-  {
-    key: 'LINE_TOKEN',
-    label: 'LINE Channel access token',
-    hint: '發「預約已確認」「課程完成」LINE 通知用（LINE Developers → Messaging API → Channel access token）'
-  },
-  {
-    key: 'TEST_PASSWORD',
-    label: '測試用登入密碼',
-    hint: '設定後，可用這組密碼登入後台測試功能：不受客戶改過的後台密碼影響，登入後也不會被要求改密碼，畫面上方會顯示「測試模式」。測試完請清除，交付給客戶前一定要清掉。',
-    noTail: true
-  }
-];
-
-var STATUS_PENDING = '待確認';
-var STATUS_CONFIRM = '已預約';
-var STATUS_CANCEL = '已取消';
-
-var STUDIO_NAME = 'MOON CORE PILATES';
-
-var MAX_FAILS = 5;
-var LOCK_SECONDS = 600;
-
-// 與 buildServiceFlexMessage() 使用相同配色
-var FLEX = {
-  primary: '#6F4E37',      // header 底色（咖啡）
-  lightAccent: '#EBDCC3',  // 工作室名稱
-  light: '#FFFFFF',        // header 標題文字
-  background: '#F7F1E6',   // body / footer 底色（米）
-  line: '#E0D0B8',         // 分隔線
-  label: '#8A7260',        // 欄位名稱、說明小字
-  text: '#4A3B30',         // 內文
-  dark: '#4B342A',         // 深咖啡強調文字（備用）
-  accent: '#8B5E3C'        // 摩卡色按鈕／強調（備用）
-};
-
-
-/* ---------- Web API ---------- */
-
-function doGet() {
-  return ContentService.createTextOutput('ok');
+<style>
+:root {
+  color-scheme: light;
+  --bg: #F6EFE4;
+  --card: #FFFCF7;
+  --pill: #EDE2D0;
+  --ink: #4B3426;
+  --mute: #8A7564;
+  --line: #E0D0B8;
+  --warn: #A8741A;
+  --ok: #5F7355;
+  --bad: #A8473B;
+  --serif: "Noto Serif TC", "Songti TC", serif;
 }
 
-function doPost(e) {
-  var out;
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-height: 100%;
+  background: var(--bg);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  background: var(--bg);
+  color: var(--ink);
+  font: 400 15px/1.65 system-ui, -apple-system, BlinkMacSystemFont,
+    "PingFang TC", "Noto Sans TC", sans-serif;
+}
+
+button, input, select, textarea {
+  box-sizing: border-box;
+  font: inherit;
+}
+
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+main {
+  width: 100%;
+  max-width: 560px;
+  min-height: 100vh;
+  margin: 0 auto;
+  padding: 22px 16px 110px;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+/* 品牌標題 */
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 26px;
+}
+
+.logo {
+  font-family: var(--serif);
+  font-size: 19px;
+  letter-spacing: .32em;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.logo small {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  letter-spacing: .2em;
+  color: var(--mute);
+  font-family: system-ui, sans-serif;
+}
+
+/* 登入 / 修改密碼 */
+#login,
+#pwscreen {
+  padding-top: 46px;
+}
+
+#login > .logo,
+#pwscreen > .logo {
+  padding: 0 4px 20px;
+}
+
+#login .card,
+#pwscreen .card {
+  margin-top: 12px;
+}
+
+/* 標題 */
+h1 {
+  font: 600 28px/1.35 var(--serif);
+  margin: 0 0 8px;
+  letter-spacing: .04em;
+  color: var(--ink);
+}
+
+.sub {
+  color: var(--mute);
+  margin: 0 0 22px;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+/* 頁籤 */
+.pills {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 3px 2px 9px;
+  margin: 0 0 18px;
+  scrollbar-width: none;
+}
+
+.pills::-webkit-scrollbar {
+  display: none;
+}
+
+.pill {
+  flex: 0 0 auto;
+  padding: 10px 17px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  background: var(--pill);
+  color: var(--ink);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .2s, color .2s;
+}
+
+.pill.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--card);
+}
+
+.pill.s {
+  padding: 7px 13px;
+  font-size: 13px;
+}
+
+/* 卡片框線 */
+.card {
+  min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  margin-bottom: 14px;
+  box-shadow: 0 2px 8px rgba(75, 52, 38, .04);
+}
+
+/* 橫向排列 */
+.row {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.sp {
+  justify-content: space-between;
+}
+
+.mute {
+  color: var(--mute);
+  font-size: 13px;
+}
+
+/* 表單 */
+input,
+select,
+textarea {
+  min-width: 0;
+  max-width: 100%;
+  padding: 11px 12px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 16px;
+  font-family: inherit;
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--mute);
+  box-shadow: 0 0 0 3px rgba(138, 117, 100, .12);
+}
+
+input.w {
+  flex: 1 1 160px;
+  width: 100%;
+}
+
+textarea {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  margin-top: 10px;
+  line-height: 1.7;
+}
+
+/* 按鈕 */
+.b {
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 16px;
+  border: 1px solid var(--ink);
+  border-radius: 99px;
+  background: var(--ink);
+  color: var(--card);
+  font-size: 14px;
+  font-family: inherit;
+  line-height: 1.5;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.b.g {
+  background: var(--card);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+.b.d {
+  background: var(--card);
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+.b.sm {
+  padding: 7px 12px;
+  font-size: 13px;
+}
+
+button:disabled {
+  opacity: .4;
+  cursor: default;
+}
+
+/* 狀態標籤 */
+.tag {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 12px;
+  padding: 2px 10px;
+  border-radius: 99px;
+  border: 1px solid currentColor;
+  white-space: nowrap;
+}
+
+.t-待確認 {
+  color: var(--warn);
+}
+
+.t-已預約 {
+  color: var(--ok);
+}
+
+.t-已取消 {
+  color: var(--mute);
+}
+
+/* 預約項目 */
+.bk {
+  padding: 15px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.bk:first-child {
+  padding-top: 2px;
+}
+
+.bk:last-child {
+  border: 0;
+  padding-bottom: 0;
+}
+
+.bk.x {
+  opacity: .6;
+}
+
+.bk .row {
+  gap: 8px;
+}
+
+.bk a {
+  color: var(--ink);
+  text-decoration-color: var(--line);
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+
+.bk .mute {
+  margin-top: 4px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+
+.dh {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--serif);
+  font-weight: 600;
+  margin: 20px 0 7px;
+}
+
+.dh.now {
+  color: var(--warn);
+}
+
+.none {
+  margin: 8px 0 2px;
+  padding: 10px 0;
+}
+
+/* 日期導覽 */
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.nav b {
+  font-family: var(--serif);
+  font-size: 16px;
+  text-align: center;
+}
+
+.nav button.r {
+  flex: 0 0 38px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 21px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* 月曆 */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 5px;
+  text-align: center;
+}
+
+.wh {
+  font-size: 12px;
+  color: var(--mute);
+  padding: 5px 0;
+}
+
+.c {
+  width: 100%;
+  min-width: 0;
+  aspect-ratio: 1 / 1.05;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.c b {
+  font-weight: 500;
+  font-size: 15px;
+}
+
+.c i {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--mute);
+  min-height: 15px;
+  line-height: 15px;
+}
+
+.c i.n {
+  background: var(--pill);
+  color: var(--ink);
+  border-radius: 99px;
+  padding: 0 7px;
+}
+
+.c i.p {
+  background: var(--warn);
+  color: #fff;
+}
+
+.c.today b {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.c.sel {
+  background: var(--ink);
+  color: var(--card);
+}
+
+.c.sel i {
+  color: var(--card);
+}
+
+.c.sel i.n {
+  background: var(--card);
+  color: var(--ink);
+}
+
+.c.dy {
+  box-shadow: inset 0 -3px 0 var(--warn);
+}
+
+.c:disabled {
+  opacity: .25;
+  cursor: default;
+}
+
+/* 時段選擇 */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0;
+}
+
+.chip {
+  padding: 9px 14px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  font-size: 14px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.chip.on {
+  background: var(--ink);
+  color: var(--card);
+  border-color: var(--ink);
+}
+
+/* 服務價格欄位 */
+.f3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 9px;
+  margin: 14px 0;
+}
+
+.f3 label {
+  display: block;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--mute);
+}
+
+.f3 input {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  margin-top: 5px;
+  padding: 10px 7px;
+}
+
+/* 底部儲存列 */
+.bar {
+  position: fixed;
+  z-index: 5;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+  background: rgba(255, 252, 247, .96);
+  border-top: 1px solid var(--line);
+  box-shadow: 0 -4px 18px rgba(75, 52, 38, .07);
+  backdrop-filter: blur(12px);
+}
+
+.bar .b {
+  display: flex;
+  width: 100%;
+  max-width: 528px;
+  margin: 0 auto;
+  padding: 13px;
+}
+
+/* 提示訊息 */
+#toast {
+  position: fixed;
+  left: 50%;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--card);
+  padding: 11px 20px;
+  border: 1px solid var(--line);
+  border-radius: 99px;
+  font-size: 14px;
+  max-width: calc(100% - 32px);
+  z-index: 20;
+  box-shadow: 0 5px 20px rgba(0, 0, 0, .12);
+  text-align: center;
+}
+
+a {
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--warn);
+  outline-offset: 3px;
+}
+
+/* 營業時間清單：時段旁的刪除 × */
+.chip.x {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px 6px 13px;
+  cursor: default;
+}
+
+.chip.x button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pill);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hl {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.hl:last-child {
+  border: 0;
+  padding-bottom: 0;
+}
+
+.hl .hd {
+  font-family: var(--serif);
+  font-weight: 600;
+}
+
+.hl .chips {
+  margin: 8px 0 0;
+}
+
+.t-已完成 {
+  color: #5E6B8C;
+}
+
+.sysnote {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--mute);
+}
+
+/* 剩餘堂數 */
+.credit {
+  font-family: var(--serif);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1;
+  margin: 0 3px;
+}
+
+.card select {
+  flex: 1 1 150px;
+}
+
+/* 手機版 */
+@media (max-width: 380px) {
+  main {
+    padding: 18px 12px 105px;
+  }
+
+  .card {
+    padding: 14px;
+    border-radius: 15px;
+  }
+
+  .pill {
+    padding: 9px 13px;
+  }
+
+  .f3 {
+    gap: 6px;
+  }
+
+  .f3 input {
+    font-size: 15px;
+    padding: 9px 5px;
+  }
+
+  .bk .row.sp {
+    align-items: flex-start;
+  }
+}
+</style>
+</head>
+
+<body>
+<main>
+
+<div id="login">
+  <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
+  <div class="card" style="margin-top:28px">
+    <p class="mute" style="margin-top:0">輸入後台密碼</p>
+    <div class="row">
+      <input id="pw" type="password" class="w" autocomplete="current-password">
+      <button class="b" id="go">登入</button>
+    </div>
+  </div>
+</div>
+
+<!-- 修改密碼（第一次用預設密碼登入時強制出現；登入後也可從右上角進入） -->
+<div id="pwscreen" hidden>
+  <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
+  <div class="card" style="margin-top:28px">
+    <p id="pwtitle" style="margin:0 0 4px;font-weight:600"></p>
+    <p class="mute" id="pwhint" style="margin-top:0"></p>
+
+    <div id="pw-old-wrap">
+      <p class="mute">目前的密碼</p>
+      <input id="pw-old" type="password" style="width:100%;margin-bottom:12px" autocomplete="current-password">
+    </div>
+
+    <div id="pw-code-wrap" hidden>
+      <p class="mute">設定碼（請到試算表「後台設定」分頁，複製 B1 儲存格）</p>
+      <input id="pw-code" style="width:100%;margin-bottom:12px" autocomplete="off">
+    </div>
+
+    <p class="mute">新密碼（至少 8 個字元）</p>
+    <input id="pw-new" type="password" style="width:100%;margin-bottom:12px" autocomplete="new-password">
+
+    <p class="mute">確認新密碼</p>
+    <input id="pw-new2" type="password" style="width:100%;margin-bottom:14px" autocomplete="new-password">
+
+    <div class="row">
+      <button class="b" id="pw-save">儲存</button>
+      <button class="b g" id="pw-cancel" hidden>取消</button>
+    </div>
+  </div>
+</div>
+
+<div id="app" hidden>
+  <div class="top">
+    <div class="logo">MOON CORE<small>PILATES｜預約系統管理</small></div>
+    <div class="row">
+      <button class="b g sm" id="chg">修改密碼</button>
+      <button class="b g sm" id="out">登出</button>
+    </div>
+  </div>
+
+  <div id="testbar" hidden style="margin:0 0 14px;padding:9px 14px;border:1px solid var(--warn);border-radius:12px;color:var(--warn);font-size:13px">
+    測試模式：目前是用「測試用登入密碼」登入。測試完請到「系統設定」清除該密碼。
+  </div>
+
+  <h1 id="title"></h1>
+  <p class="sub" id="subt"></p>
+  <div class="mute" id="synced" style="margin:-14px 0 14px;font-size:12px"></div>
+
+  <div class="pills" id="tabs">
+    <button class="pill on" data-t="bookings">預約系統</button>
+    <button class="pill" data-t="hours">營業時間</button>
+    <button class="pill" data-t="services">服務項目</button>
+    <button class="pill" data-t="members">會員資料</button>
+    <button class="pill" data-t="settings">系統設定</button>
+  </div>
+
+  <section id="p-bookings">
+    <div class="row sp">
+      <div class="row" id="modes">
+        <button class="pill s on" data-m="day">日</button>
+        <button class="pill s" data-m="week">週</button>
+        <button class="pill s" data-m="month">月</button>
+      </div>
+      <select id="bf">
+        <option value="all">全部狀態</option>
+        <option>待確認</option>
+        <option>已預約</option>
+        <option>已完成</option>
+        <option>已取消</option>
+      </select>
+    </div>
+
+    <div class="nav">
+      <button class="r" id="bp" aria-label="上一個">‹</button>
+      <div class="row">
+        <b id="blabel"></b>
+        <button class="b g sm" id="bt">今天</button>
+      </div>
+      <button class="r" id="bn" aria-label="下一個">›</button>
+    </div>
+
+    <div class="card" id="bview"></div>
+  </section>
+
+  <section id="p-hours" hidden>
+    <div class="card">
+      <div class="nav" style="margin-top:0">
+        <button class="r" id="hp" aria-label="上個月">‹</button>
+        <b id="hlabel"></b>
+        <button class="r" id="hn" aria-label="下個月">›</button>
+      </div>
+
+      <div id="hgrid"></div>
+
+      <div class="row" id="hsel" style="margin-top:16px">
+        <span class="mute">快速選取</span>
+        <button class="pill s" data-s="wk">平日</button>
+        <button class="pill s" data-s="we">週末</button>
+        <button class="pill s" data-s="all">整月</button>
+        <button class="pill s" data-s="clear">清除</button>
+      </div>
+
+      <p class="mute" style="margin:12px 0 0">
+        格子上的數字是當天時段數，「休」是休息，底線是尚未儲存。
+      </p>
+    </div>
+
+    <div class="card" id="hed" hidden>
+      <b id="hcount"></b>
+      <div class="chips" id="hchips"></div>
+      <div class="row">
+        <input type="time" id="hT">
+        <button class="b g sm" id="hAdd">加入新時段</button>
+      </div>
+      <div class="row" style="margin-top:16px">
+        <button class="b" id="hApply">套用到所選日期</button>
+        <button class="b g" id="hOff">設為休息</button>
+      </div>
+    </div>
+    <div class="card">
+      <b>本月所有時段</b>
+      <p class="mute" style="margin:4px 0 8px">按時段旁的 × 可以刪除單一時段，刪除後記得按下方「儲存營業時間」。</p>
+      <div id="hlist"></div>
+    </div>
+  </section>
+
+  <section id="p-services" hidden>
+    <div class="row" style="margin-bottom:14px" id="sf">
+      <button class="pill s on" data-f="all">全部</button>
+      <button class="pill s" data-f="on">啟用中</button>
+      <button class="pill s" data-f="off">已停用</button>
+      <span style="flex:1"></span>
+      <button class="b sm" id="sAdd">新增服務</button>
+    </div>
+    <div id="slist"></div>
+  </section>
+
+  <section id="p-members" hidden>
+    <div class="card">
+      <p class="mute" style="margin:0 0 10px">新增會員（還沒預約過、直接購買課程包的學員）</p>
+      <div class="row">
+        <input id="mn" class="w" placeholder="姓名">
+        <input id="mp" class="w" type="tel" inputmode="tel" placeholder="電話">
+        <button class="b" id="mAdd">新增</button>
+      </div>
+    </div>
+    <input id="mq" style="width:100%;margin-bottom:14px" placeholder="搜尋姓名或電話">
+    <div id="mlist"></div>
+  </section>
+
+  <section id="p-settings" hidden>
+
+    <div class="card" id="slock">
+      <p class="mute" style="margin:0 0 12px">
+        這一區是管理員專用，需要另一組「管理員密碼」（和後台登入密碼不同）。離開這個分頁會自動上鎖。
+      </p>
+      <div class="row">
+        <input id="spw" type="password" class="w" placeholder="管理員密碼" autocomplete="off">
+        <button class="b" id="sUnlock">解鎖</button>
+      </div>
+    </div>
+
+    <div id="sopen" hidden>
+      <div class="card">
+        <div class="row sp">
+          <p class="mute" style="margin:0;flex:1 1 220px">
+            只能寫入後台這個專案的指令碼屬性，內容只寫入、不會再顯示完整值。解鎖 30 分鐘後自動上鎖。
+            前台專案（CHANNEL_ACCESS_TOKEN 等）是另一個 GAS 專案，請在它自己的「專案設定」修改。
+          </p>
+          <button class="b g sm" id="sLock">立即上鎖</button>
+        </div>
+      </div>
+
+      <div id="plist"></div>
+
+      <div class="card">
+        <b>重置後台登入密碼</b>
+        <p class="mute" style="margin:4px 0 12px">
+          把後台登入密碼重置為初始密碼 12345，讓客戶重新用 12345 登入並自行修改。
+          第一次修改時需要試算表「後台設定」分頁 B1 的設定碼。重置後，目前登入中的人會被登出。
+        </p>
+        <button class="b g sm d" id="sReset">重置為初始密碼 12345</button>
+      </div>
+
+      <div class="card">
+        <b>修改管理員密碼</b>
+        <p class="mute" style="margin:4px 0 12px">至少 10 個字元，不能和後台登入密碼相同。</p>
+        <input id="sOld" type="password" style="width:100%;margin-bottom:10px" placeholder="目前的管理員密碼" autocomplete="off">
+        <input id="sNew" type="password" style="width:100%;margin-bottom:10px" placeholder="新的管理員密碼" autocomplete="new-password">
+        <input id="sNew2" type="password" style="width:100%;margin-bottom:12px" placeholder="再輸入一次新密碼" autocomplete="new-password">
+        <button class="b sm" id="sChg">修改管理員密碼</button>
+      </div>
+    </div>
+
+  </section>
+
+  <div class="bar" id="bar" hidden>
+    <button class="b" id="save"></button>
+  </div>
+</div>
+
+<div id="toast" hidden></div>
+</main>
+
+<script>
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyowZ3EXmAyImLihpeBhn9wf7gqg29unT4zWZtfycsoB58IX_pFz2Fr9GWqOpRm1plBXQ/exec";
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
+  "&":"&amp;",
+  "<":"&lt;",
+  ">":"&gt;",
+  '"':"&quot;",
+  "'":"&#39;"
+}[c]));
+
+const WN = "日一二三四五六";
+const D = s => new Date(s + "T00:00:00Z");
+const fmt = d => d.toISOString().slice(0,10);
+const add = (s,n) => {
+  const d = D(s);
+  d.setUTCDate(d.getUTCDate()+n);
+  return fmt(d);
+};
+const wd = s => D(s).getUTCDay();
+const today = () => new Date().toLocaleDateString("sv-SE",{timeZone:"Asia/Taipei"});
+const short = s => `${+s.slice(5,7)}/${+s.slice(8)}`;
+const md = s => `${short(s)}（${WN[wd(s)]}）`;
+const mStart = s => s.slice(0,8)+"01";
+const addMonth = (s,n) => {
+  const d = D(mStart(s));
+  d.setUTCMonth(d.getUTCMonth()+n);
+  return fmt(d);
+};
+const mDays = ms => new Date(Date.UTC(+ms.slice(0,4),+ms.slice(5,7),0)).getUTCDate();
+const dayOf = (ms,d) => ms.slice(0,8)+String(d).padStart(2,"0");
+const fixPhone = p => /^9\d{8}$/.test(p) ? "0"+p : p;
+const mLabel = ms => `${ms.slice(0,4)} 年 ${+ms.slice(5,7)} 月`;
+
+// 登入狀態：只存後端發的 session，不再存密碼
+let session = "";
+try {
+  session = sessionStorage.getItem("session") || "";
+  sessionStorage.removeItem("pw"); // 清掉舊版存的明文密碼
+} catch(e) {}
+
+let superToken = "";
+let S = {hours:[],services:[],bookings:[],members:[]};
+let svc = [], dirty = new Map(), tab = "bookings", tt;
+
+const TITLES = {
+  bookings:["預約系統","所有預約都在這裡，可切換日、週、月檢視。"],
+  hours:["營業時間","點選日期，挑好時段，一次套用到多天。"],
+  services:["服務項目","調整體驗課與正式課程的價格、時長；不再提供的課程可以停用或刪除。包堂方案請在試算表「課程方案」分頁調整。"],
+  members:["會員資料","學員的聯絡方式、購買／已上／剩餘堂數，以及你自己的備註。"],
+  settings:["系統設定","管理員專用：寫入通知用的金鑰（指令碼屬性）。"]
+};
+
+function toast(m) {
+  const t = $("toast");
+  t.textContent = m;
+  t.hidden = false;
+  clearTimeout(tt);
+  tt = setTimeout(()=>t.hidden=true,m.length>22?5500:2800);
+}
+
+/* ---------- API ---------- */
+
+// 不帶 session 的原始請求（登入用）
+async function post(action,data={}) {
+  if (GAS_URL.indexOf("http") !== 0) {
+    throw new Error("請先在 admin.html 設定 GAS_URL");
+  }
+  const res = await fetch(GAS_URL,{
+    method:"POST",
+    body:JSON.stringify({action,...data})
+  });
+  return res.json();
+}
+
+// 帶 session 的請求；過期或被要求先改密碼時回到登入頁
+async function api(action,data={}) {
+  const j = await post(action,{session,superToken,...data});
+  if (!j.ok) {
+    if (j.code === "SUPER_EXPIRED") {
+      superToken = "";
+      showSettingsLock();
+    }
+    if (j.code === "SESSION_EXPIRED" || j.code === "MUST_CHANGE") {
+      dropSession();
+      showLogin();
+    }
+    throw new Error(j.error || "發生錯誤");
+  }
+  return j;
+}
+
+function setSession(t) {
+  session = t;
+  try { sessionStorage.setItem("session",t); } catch(e) {}
+}
+
+function dropSession() {
+  session = "";
+  try { sessionStorage.removeItem("session"); } catch(e) {}
+}
+
+function showLogin() {
+  $("app").hidden = true;
+  $("pwscreen").hidden = true;
+  $("login").hidden = false;
+  $("pw").value = "";
+}
+
+const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members]);
+let lastSig = "", lastIds = null, polling = false;
+
+function stamp() {
+  $("synced").textContent = "即時同步中・最後更新 " +
+    new Date().toLocaleTimeString("zh-TW",{hour12:false,timeZone:"Asia/Taipei"});
+}
+
+async function load() {
+  S = await api("getAll");
+  svc = S.services.map(s=>({...s}));
+  lastSig = sig(S);
+  lastIds = new Set(S.bookings.map(b=>String(b["預約編號"])));
+  renderAll();
+  stamp();
+  $("testbar").hidden = !S.testMode;
+}
+
+/* 即時同步：每 30 秒（頁面開著時）＋切回頁面時重新讀取；
+   正在編輯的區塊先不重畫，避免打到一半的內容消失 */
+const POLL_MS = 30000;
+const typingIn = id => $(id).contains(document.activeElement);
+
+async function refresh() {
+  if (polling || !session || $("app").hidden || $("save").disabled) return;
+  polling = true;
 
   try {
-    if (!e || !e.postData || !e.postData.contents) {
-      throw new Error('缺少請求內容');
+    const j = await api("getAll");
+    const s = sig(j);
+    stamp();
+
+    if (s === lastSig) { polling = false; return; }
+
+    // 有新的預約就提醒
+    if (lastIds) {
+      const fresh = j.bookings.filter(b=>!lastIds.has(String(b["預約編號"]))&&b["狀態"]!=="已取消");
+      if (fresh.length) toast(`有新的預約：${fresh[0]["姓名"]} ${md(fresh[0]["日期"])} ${fresh[0]["時間"]}`);
     }
+    lastIds = new Set(j.bookings.map(b=>String(b["預約編號"])));
 
-    var req = JSON.parse(e.postData.contents);
+    const prevServices = S.services;
+    S = j;
+    $("testbar").hidden = !S.testMode;
 
-    if (req.action === 'login') {
-      out = login_(req);
+    // 服務項目：有未儲存的修改就保留你的版本
+    if (svcNorm(svc)===svcNorm(prevServices)) svc = j.services.map(x=>({...x}));
+
+    // 營業時間：未儲存的修改重新套回去
+    dirty.forEach((v,ds)=>{
+      const ex = S.hours.find(h=>h.date===ds);
+      if (ex) ex.slots = v.slots;
+      else S.hours.push({date:ds,slots:v.slots,note:""});
+    });
+
+    let skipped = false;
+    renderBookings();
+    renderHours();
+
+    if (typingIn("slist")) skipped = true; else renderServices();
+    if (typingIn("p-members")) skipped = true; else renderMembers();
+
+    updBar();
+    if (!skipped) lastSig = s;
+  } catch(e) {
+    // 背景同步失敗不打擾，下一輪再試
+  }
+
+  polling = false;
+}
+
+setInterval(()=>{ if (!document.hidden) refresh(); }, POLL_MS);
+document.addEventListener("visibilitychange", ()=>{ if (!document.hidden) refresh(); });
+window.addEventListener("focus", refresh);
+
+/* ---------- 登入 / 修改密碼 ---------- */
+
+async function enterApp() {
+  await load();
+  $("login").hidden = true;
+  $("pwscreen").hidden = true;
+  $("app").hidden = false;
+  setTab("bookings");
+}
+
+async function login() {
+  const typed = $("pw").value;
+  if (!typed) return;
+
+  $("go").disabled = true;
+  try {
+    const r = await post("login",{pw:typed});
+    if (!r.ok) throw new Error(r.error || "登入失敗");
+
+    setSession(r.session);
+    $("pw").value = "";
+
+    if (r.mustChange) {
+      // 還在用預設密碼：必須先修改才能使用後台
+      openPwScreen({forced:true,oldPw:typed,needCode:r.requireSetupCode});
     } else {
-      authenticate_(req);
-      out = route_(req);
+      await enterApp();
     }
-  } catch (err) {
-    out = {
-      ok: false,
-      error: String(err.message || err),
-      code: err && err.code
-    };
+  } catch(e) {
+    toast(e.message);
   }
-
-  return ContentService
-    .createTextOutput(JSON.stringify(out))
-    .setMimeType(ContentService.MimeType.JSON);
+  $("go").disabled = false;
 }
 
+let PW = {forced:false,oldPw:"",needCode:false};
 
-/* ---------- 登入驗證（預設密碼 + 登入後修改） ---------- */
+function openPwScreen(o) {
+  PW = {forced:!!o.forced,oldPw:o.oldPw || "",needCode:!!o.needCode};
 
-/*
- * 初始密碼是 DEFAULT_PASSWORD（12345）。
- *
- * - 用預設密碼登入後，只能做「修改密碼」，其他功能一律被擋（MUST_CHANGE）。
- * - 第一次把密碼從預設改掉時，要輸入試算表「後台設定」分頁 B1 的設定碼，
- *   證明修改的人看得到這份試算表，避免知道預設密碼的陌生人搶先改掉。
- * - 新密碼以「加鹽雜湊」存進指令碼屬性 ADMIN_PW_HASH / ADMIN_PW_SALT。
- * - 登入成功後發 session（6 小時），之後的請求帶 session；
- *   舊版每次請求帶 pw 的方式仍可使用。
- * - 忘記密碼：在 Apps Script 編輯器手動執行 resetPassword_()，會回到預設密碼。
- */
+  $("login").hidden = true;
+  $("app").hidden = true;
+  $("pwscreen").hidden = false;
 
-var DEFAULT_PASSWORD = '12345';
-var SETUP_SHEET = '後台設定';
-var REQUIRE_SETUP_CODE = true;   // 設為 false 則不需要設定碼（知道預設密碼的人就能改密碼）
-var MIN_PW_LEN = 8;
-var MAX_PW_LEN = 100;
-var SESSION_SECONDS = 21600;     // CacheService 上限 6 小時
+  $("pwtitle").textContent = PW.forced ? "請先修改密碼" : "修改密碼";
+  $("pwhint").textContent = PW.forced
+    ? "你正在使用預設密碼，請設定一組新的後台密碼。"
+    : "";
+  $("pw-old-wrap").hidden = PW.forced;
+  $("pw-code-wrap").hidden = !PW.needCode;
+  $("pw-cancel").hidden = PW.forced;
 
-// 使用預設密碼期間，只允許這些動作
-var ALLOWED_WHEN_DEFAULT = ['whoami', 'logout', 'changePassword'];
-
-function fail_(msg, code) {
-  var e = new Error(msg);
-  e.code = code;
-  return e;
+  ["pw-old","pw-code","pw-new","pw-new2"].forEach(id => $(id).value = "");
 }
 
-/**
- * 固定時間字串比較，避免從回應時間推測密碼 / 設定碼。
- */
-function safeEqual_(a, b) {
-  a = String(a);
-  b = String(b);
+$("chg").onclick = () => openPwScreen({});
 
-  var diff = a.length ^ b.length;
-  var len = Math.max(a.length, b.length);
+$("pw-cancel").onclick = () => {
+  $("pwscreen").hidden = true;
+  $("app").hidden = false;
+};
 
-  for (var i = 0; i < len; i++) {
-    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
-  }
+$("pw-save").onclick = async () => {
+  const b = $("pw-save");
+  b.disabled = true;
 
-  return diff === 0;
-}
-
-function newCode_() {
-  return Utilities.getUuid().replace(/-/g, '').slice(0, 8).toUpperCase();
-}
-
-
-/* --- 失敗次數鎖定 --- */
-
-// 因 Apps Script 取不到來源 IP，鎖定為全域；
-// 被鎖住時可在編輯器手動執行 resetLock_() 解除。
-function checkNotLocked_() {
-  var fails = Number(CacheService.getScriptCache().get('fails') || 0);
-
-  if (fails >= MAX_FAILS) {
-    throw fail_('嘗試次數過多，請 10 分鐘後再試', 'LOCKED');
-  }
-}
-
-function addFail_() {
-  var cache = CacheService.getScriptCache();
-  var fails = Number(cache.get('fails') || 0);
-
-  cache.put('fails', String(fails + 1), LOCK_SECONDS);
-}
-
-function resetLock_() {
-  CacheService.getScriptCache().remove('fails');
-}
-
-
-/* --- 密碼儲存（加鹽雜湊） --- */
-
-function hashPw_(salt, pw) {
-  var bytes = Utilities.computeDigest(
-    Utilities.DigestAlgorithm.SHA_256,
-    salt + ':' + pw,
-    Utilities.Charset.UTF_8
-  );
-
-  return bytes.map(function (b) {
-    return ('0' + (b & 0xff).toString(16)).slice(-2);
-  }).join('');
-}
-
-/** 是否已自訂過密碼（雜湊或舊版 ADMIN_PASSWORD 任一存在）。 */
-function isCustomized_() {
-  var props = PropertiesService.getScriptProperties();
-
-  return !!(
-    (props.getProperty('ADMIN_PW_HASH') &&
-      props.getProperty('ADMIN_PW_SALT')) ||
-    props.getProperty('ADMIN_PASSWORD')
-  );
-}
-
-function usingDefault_() {
-  return !isCustomized_();
-}
-
-function verifyPassword_(pw) {
-  var props = PropertiesService.getScriptProperties();
-  var hash = props.getProperty('ADMIN_PW_HASH');
-  var salt = props.getProperty('ADMIN_PW_SALT');
-  var legacy = props.getProperty('ADMIN_PASSWORD');
-
-  pw = String(pw || '');
-
-  if (!pw) return false;
-
-  if (hash && salt) {
-    return safeEqual_(hashPw_(salt, pw), hash);
-  }
-
-  if (legacy) {
-    return safeEqual_(pw, legacy);
-  }
-
-  return safeEqual_(pw, DEFAULT_PASSWORD);
-}
-
-function validateNewPassword_(pw, confirm) {
-  if (pw.length < MIN_PW_LEN) {
-    throw fail_('新密碼至少要 ' + MIN_PW_LEN + ' 個字元', 'BAD_PASSWORD');
-  }
-
-  if (pw.length > MAX_PW_LEN) {
-    throw fail_('新密碼太長了', 'BAD_PASSWORD');
-  }
-
-  if (pw === DEFAULT_PASSWORD) {
-    throw fail_('新密碼不能和預設密碼相同', 'BAD_PASSWORD');
-  }
-
-  if (pw !== confirm) {
-    throw fail_('兩次輸入的新密碼不一致', 'BAD_PASSWORD');
-  }
-}
-
-function saveNewPassword_(pw) {
-  var props = PropertiesService.getScriptProperties();
-  var salt = Utilities.getUuid();
-
-  props.setProperties({
-    ADMIN_PW_SALT: salt,
-    ADMIN_PW_HASH: hashPw_(salt, pw)
-  });
-
-  // 舊版明文密碼不再有效
-  props.deleteProperty('ADMIN_PASSWORD');
-}
-
-
-/* --- 設定碼（證明修改密碼的人看得到這份試算表） --- */
-
-function ensureSetupCode_() {
-  var ss = getSpreadsheet_();
-  var sh = ss.getSheetByName(SETUP_SHEET) || ss.insertSheet(SETUP_SHEET);
-  var cell = sh.getRange(1, 2);
-
-  if (!String(cell.getValue()).trim()) {
-    sh.getRange(1, 1).setValue('設定碼');
-    cell.setNumberFormat('@');
-    cell.setValue(newCode_());
-    sh.getRange(2, 1).setValue(
-      '第一次修改後台密碼時輸入此設定碼；修改完成後會自動清除。'
-    );
-  }
-}
-
-function readSetupCode_() {
-  var sh = getSpreadsheet_().getSheetByName(SETUP_SHEET);
-
-  return sh ? String(sh.getRange(1, 2).getValue()).trim() : '';
-}
-
-function clearSetupCode_() {
-  var sh = getSpreadsheet_().getSheetByName(SETUP_SHEET);
-
-  if (sh) sh.getRange(1, 2).clearContent();
-}
-
-
-/* --- 登入 / 修改密碼 --- */
-
-/*
- * 測試密碼（指令碼屬性 TEST_PASSWORD，可在後台「系統設定」寫入）：
- * - 沒設定就完全不存在；設定後可用它登入後台，不受客戶改過的密碼影響。
- * - 測試 session 不會被要求「先修改預設密碼」；改掉或清除這個屬性，測試 session 立刻失效。
- */
-function verifyTestPw_(pw) {
-  var t = PropertiesService.getScriptProperties().getProperty('TEST_PASSWORD');
-
-  pw = String(pw || '');
-
-  return !!(t && pw && safeEqual_(pw, t));
-}
-
-function testStamp_() {
-  var t = PropertiesService.getScriptProperties().getProperty('TEST_PASSWORD');
-
-  return t ? 'test:' + hashPw_('test', t) : '';
-}
-
-function newTestSession_() {
-  var token =
-    Utilities.getUuid().replace(/-/g, '') +
-    Utilities.getUuid().replace(/-/g, '');
-
-  CacheService.getScriptCache()
-    .put('sess:' + token, testStamp_(), SESSION_SECONDS);
-
-  return token;
-}
-
-function isTestSession_(req) {
-  var stamp = CacheService.getScriptCache().get('sess:' + String(req.session || ''));
-
-  return !!(stamp && stamp.indexOf('test:') === 0);
-}
-
-function login_(req) {
-  checkNotLocked_();
-
-  if (verifyTestPw_(req.pw || req.password)) {
-    CacheService.getScriptCache().remove('fails');
-
-    return {
-      ok: true,
-      session: newTestSession_(),
-      mustChange: false,
-      requireSetupCode: false,
-      testMode: true
-    };
-  }
-
-  if (!verifyPassword_(req.pw || req.password)) {
-    addFail_();
-    throw fail_('密碼錯誤', 'BAD_PASSWORD');
-  }
-
-  CacheService.getScriptCache().remove('fails');
-
-  var def = usingDefault_();
-  var needCode = def && REQUIRE_SETUP_CODE;
-
-  // 預設密碼期間，先準備好設定碼讓使用者去試算表查看
-  if (needCode) {
-    withLock_(function () {
-      ensureSetupCode_();
+  try {
+    const r = await api("changePassword",{
+      oldPassword: PW.forced ? PW.oldPw : $("pw-old").value,
+      setupCode: PW.needCode ? $("pw-code").value : "",
+      newPassword: $("pw-new").value,
+      confirm: $("pw-new2").value
     });
+
+    setSession(r.session); // 換了密碼，舊 session 失效，改用新的
+    PW.oldPw = "";
+    toast("密碼已更新");
+
+    if (PW.forced) {
+      await enterApp();
+    } else {
+      $("pwscreen").hidden = true;
+      $("app").hidden = false;
+    }
+  } catch(e) {
+    toast(e.message);
   }
 
-  return {
-    ok: true,
-    session: newSession_(),
-    mustChange: def,
-    requireSetupCode: needCode
-  };
+  b.disabled = false;
+};
+
+$("go").onclick = login;
+$("pw").onkeydown = e => {
+  if (e.key === "Enter") login();
+};
+
+$("out").onclick = async () => {
+  try { await post("logout",{session}); } catch(e) {}
+  dropSession();
+  location.reload();
+};
+
+// 重新整理頁面時，若 session 還有效就直接進後台
+if (session) enterApp().catch(()=>{});
+
+function setTab(t) {
+  tab = t;
+  document.querySelectorAll("#tabs .pill").forEach(x=>{
+    x.classList.toggle("on",x.dataset.t===t);
+  });
+  ["bookings","hours","services","members","settings"].forEach(k=>{
+    $("p-"+k).hidden = k!==t;
+  });
+  $("title").textContent = TITLES[t][0];
+  $("subt").textContent = TITLES[t][1];
+  updBar();
+  superToken = "";          // 離開設定頁（或重新進入）一律重新上鎖
+  showSettingsLock();
 }
 
-function changePassword_(r) {
-  checkNotLocked_();
+$("tabs").onclick = e => {
+  const b = e.target.closest("button[data-t]");
+  if (b) setTab(b.dataset.t);
+};
 
-  if (!verifyPassword_(r.oldPassword)) {
-    addFail_();
-    throw fail_('目前的密碼不正確', 'BAD_PASSWORD');
+/* 預約：日／週／月 */
+const V = {mode:"day",cur:today(),sel:today()};
+
+function bkByDate() {
+  const f = $("bf").value, m = {};
+  S.bookings.forEach(b=>{
+    if (f!=="all" && b["狀態"]!==f) return;
+    (m[b["日期"]]=m[b["日期"]]||[]).push(b);
+  });
+  for (const k in m) {
+    m[k].sort((a,b)=>a["時間"].localeCompare(b["時間"]));
   }
-
-  // 第一次從預設密碼改掉：需要設定碼
-  if (usingDefault_() && REQUIRE_SETUP_CODE) {
-    var code = String(r.setupCode || '').trim();
-    var expected = readSetupCode_();
-
-    if (
-      !code ||
-      !expected ||
-      !safeEqual_(code.toUpperCase(), expected.toUpperCase())
-    ) {
-      addFail_();
-      throw fail_(
-        '設定碼錯誤，請到試算表「' + SETUP_SHEET + '」分頁查看',
-        'BAD_CODE'
-      );
-    }
-  }
-
-  var pw = String(r.newPassword || '');
-
-  validateNewPassword_(pw, String(r.confirm || ''));
-  saveNewPassword_(pw);
-  clearSetupCode_();
-
-  // 換了新的 salt，舊 session 會一併失效
-  return { ok: true, session: newSession_() };
+  return m;
 }
 
-/**
- * 忘記密碼時，在 Apps Script 編輯器手動執行。
- * 會清除自訂密碼並回到預設密碼，設定碼也會在下次登入時重新產生。
- */
-function resetPassword_() {
-  var props = PropertiesService.getScriptProperties();
+const pkey = p => String(p||"").replace(/\D/g,"").replace(/^0+/,"");
+const memberOf = p => S.members.find(m=>pkey(m["電話"])===pkey(p));
+const PAYS = ["刷卡","現金","轉帳"];
 
-  props.deleteProperty('ADMIN_PW_HASH');
-  props.deleteProperty('ADMIN_PW_SALT');
-  props.deleteProperty('ADMIN_PASSWORD');
+function bkCard(b) {
+  const st=b["狀態"], id=esc(b["預約編號"]);
+  const pack=(+b["扣抵"]||0)>0;
+  const mem=memberOf(b["電話"]);
+  const left=mem&&((+mem["購買堂數"]||0)>0||(+mem["剩餘堂數"]||0)>0)
+    ? `　會員剩餘 ${parseInt(mem["剩餘堂數"],10)||0} 堂` : "";
+  const pay=pack?"":`<select data-pay="${id}" ${st==="已取消"?"disabled":""}>
+        <option value="">未收款</option>
+        ${PAYS.map(p=>`<option ${b["付款方式"]===p?"selected":""}>${p}</option>`).join("")}
+      </select>`;
 
-  clearSetupCode_();
-  resetLock_();
+  return `<div class="bk ${st==="已取消"?"x":""}">
+    <div class="row sp">
+      <b>${esc(b["時間"])}　${esc(b["服務"])}</b>
+      <span class="tag t-${esc(st)}">${esc(st)}</span>
+    </div>
+    <div>${esc(b["姓名"])}・<a href="tel:${esc(fixPhone(b["電話"]))}">${esc(fixPhone(b["電話"]))}</a></div>
+    <div class="mute">${pack?"課程包扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
+    ${b["系統備註"]?`<div class="sysnote">${esc(b["系統備註"])}</div>`:""}
+    <div class="row" style="margin-top:10px">
+      <button class="b sm" data-act="ok" data-id="${id}" ${st==="已預約"?"disabled":""}>確認</button>
+      <button class="b sm" data-act="done" data-id="${id}" ${st==="已完成"||st==="已取消"?"disabled":""}>完成</button>
+      <button class="b sm d" data-act="no" data-id="${id}" ${st==="已取消"?"disabled":""}>取消</button>
+      ${pay}
+    </div>
+  </div>`;
 }
 
+const bkList = a => a&&a.length
+  ? a.map(bkCard).join("")
+  : '<p class="mute none">這天沒有預約。</p>';
 
-/**
- * 在 Apps Script 編輯器手動執行（和 resetPassword_ 相同，只是名稱沒有底線，
- * 才會出現在編輯器上方的函式下拉選單）。
- * 執行後後台登入密碼回到初始密碼 12345，客戶登入後必須先修改。
- */
-function resetAdminPassword() {
-  resetPassword_();
-}
+function renderBookings() {
+  const m=bkByDate(), t=today();
+  let html="",label="";
 
-
-/* --- session --- */
-
-// session 綁定目前的密碼版本，換密碼 / 重設後舊 session 自動失效
-function credStamp_() {
-  var props = PropertiesService.getScriptProperties();
-
-  return props.getProperty('ADMIN_PW_SALT') ||
-    (props.getProperty('ADMIN_PASSWORD') ? 'legacy' : 'default');
-}
-
-function newSession_() {
-  var token =
-    Utilities.getUuid().replace(/-/g, '') +
-    Utilities.getUuid().replace(/-/g, '');
-
-  CacheService.getScriptCache()
-    .put('sess:' + token, credStamp_(), SESSION_SECONDS);
-
-  return token;
-}
-
-function authenticate_(req) {
-  if (req.session) {
-    var stamp = CacheService.getScriptCache()
-      .get('sess:' + String(req.session));
-
-    if (stamp && stamp.indexOf('test:') === 0) {
-      // 測試 session：測試密碼被改掉或清除就失效；不受「先修改預設密碼」限制
-      if (stamp !== testStamp_()) {
-        throw fail_('登入已過期，請重新登入', 'SESSION_EXPIRED');
-      }
-
-      return;
-    }
-
-    if (!stamp || stamp !== credStamp_()) {
-      throw fail_('登入已過期，請重新登入', 'SESSION_EXPIRED');
-    }
-  } else if (req.pw) {
-    // 舊版：每次請求帶 pw
-    checkNotLocked_();
-
-    if (!verifyPassword_(req.pw)) {
-      addFail_();
-      throw fail_('密碼錯誤', 'BAD_PASSWORD');
+  if (V.mode==="day") {
+    label=md(V.cur);
+    html=bkList(m[V.cur]);
+  } else if (V.mode==="week") {
+    const s=add(V.cur,-wd(V.cur));
+    label=`${short(s)} – ${short(add(s,6))}`;
+    for (let i=0;i<7;i++) {
+      const ds=add(s,i),a=m[ds];
+      html+=`<div class="dh ${ds===t?"now":""}" style="${i?"":"margin-top:0"}">${md(ds)}<span class="mute">${a?a.length+" 筆":""}</span></div>`
+        +(a?a.map(bkCard).join(""):'<div class="mute none">—</div>');
     }
   } else {
-    throw fail_('請先登入', 'SESSION_EXPIRED');
-  }
+    const ms=mStart(V.cur);
+    label=mLabel(ms);
+    let g=WN.split("").map(c=>`<div class="wh">${c}</div>`).join("")
+      +"<div></div>".repeat(wd(ms));
 
-  // 還在用預設密碼：只能修改密碼
-  if (
-    usingDefault_() &&
-    ALLOWED_WHEN_DEFAULT.indexOf(req.action) < 0
-  ) {
-    throw fail_('請先修改預設密碼', 'MUST_CHANGE');
-  }
-}
-
-
-/* ---------- API 路由 ---------- */
-
-function route_(r) {
-  switch (r.action) {
-    case 'whoami':
-      return { ok: true, mustChange: usingDefault_(), testMode: isTestSession_(r) };
-
-    case 'logout':
-      if (r.session) {
-        CacheService.getScriptCache().remove('sess:' + String(r.session));
-      }
-      return { ok: true };
-
-    case 'changePassword':
-      return withLock_(function () {
-        return changePassword_(r);
-      });
-
-    case 'getAll': {
-      var all = getAll_(r.fromDate);
-
-      all.testMode = isTestSession_(r);
-
-      return all;
+    for (let d=1;d<=mDays(ms);d++) {
+      const ds=dayOf(ms,d);
+      const a=(m[ds]||[]).filter(x=>x["狀態"]!=="已取消");
+      const p=a.some(x=>x["狀態"]==="待確認");
+      g+=`<button class="c ${ds===t?"today":""} ${ds===V.sel?"sel":""}" data-day="${ds}"><b>${d}</b><i class="${a.length?"n":""} ${p?"p":""}">${a.length||""}</i></button>`;
     }
 
-    case 'resetStaffPassword':
-      requireSuper_(r);
-      return withLock_(function () {
-        resetPassword_();
-        return { ok: true };
-      });
-
-    case 'saveHours':
-      return withLock_(function () {
-        return saveHours_(r.rows || []);
-      });
-
-    case 'saveServices':
-      return withLock_(function () {
-        return saveServices_(r.list || []);
-      });
-
-    case 'setStatus':
-      return withLock_(function () {
-        return setStatus_(r.id, r.status);
-      });
-
-    case 'saveMember':
-      return withLock_(function () {
-        return saveMember_(r);
-      });
-
-    case 'setPayment':
-      return withLock_(function () {
-        return setPayment_(r.id, r.method);
-      });
-
-    case 'superLogin':
-      return superLogin_(r);
-
-    case 'changeSuperPassword':
-      return withLock_(function () {
-        return changeSuperPassword_(r);
-      });
-
-    case 'getProps':
-      requireSuper_(r);
-      return getProps_();
-
-    case 'setProp':
-      return withLock_(function () {
-        return setProp_(r);
-      });
-
-    case 'clearProp':
-      return withLock_(function () {
-        return clearProp_(r);
-      });
-
-    case 'addPackage':
-      return withLock_(function () {
-        return addPackage_(r);
-      });
-
-    case 'adjustSessions':
-      return withLock_(function () {
-        return adjustSessions_(r);
-      });
-
-    case 'addMember':
-      return withLock_(function () {
-        return addMember_(r);
-      });
-
-    default:
-      throw new Error('未知的操作');
+    html=`<div class="grid">${g}</div><div class="dh">${md(V.sel)}</div>${bkList(m[V.sel])}`;
   }
+
+  $("blabel").textContent=label;
+  $("bview").innerHTML=html;
 }
 
+function shift(n) {
+  if (V.mode==="day") V.cur=add(V.cur,n);
+  else if (V.mode==="week") V.cur=add(V.cur,7*n);
+  else {
+    V.cur=addMonth(V.cur,n);
+    V.sel=V.cur.slice(0,7)===today().slice(0,7)?today():V.cur;
+  }
+  renderBookings();
+}
 
-function withLock_(fn) {
-  var lock = LockService.getScriptLock();
+$("bp").onclick=()=>shift(-1);
+$("bn").onclick=()=>shift(1);
+$("bt").onclick=()=>{
+  V.cur=V.sel=today();
+  renderBookings();
+};
+$("bf").onchange=renderBookings;
 
-  lock.waitLock(10000);
+$("modes").onclick=e=>{
+  const b=e.target.closest("button[data-m]");
+  if (!b) return;
+  if (b.dataset.m==="month") V.sel=V.cur;
+  else if (V.mode==="month") V.cur=V.sel;
+  V.mode=b.dataset.m;
+  document.querySelectorAll("#modes .pill").forEach(x=>{
+    x.classList.toggle("on",x===b);
+  });
+  renderBookings();
+};
+
+$("bview").onclick=async e=>{
+  const c=e.target.closest("button[data-day]");
+  if (c) {
+    V.sel=c.dataset.day;
+    return renderBookings();
+  }
+
+  const b=e.target.closest("button[data-act]");
+  if (!b) return;
+
+  const act=b.dataset.act, id=b.dataset.id;
+  const status={ok:"已預約",done:"已完成",no:"已取消"}[act];
+  const label={ok:"已確認",done:"已完成",no:"已取消"}[act];
+  const bk=S.bookings.find(x=>String(x["預約編號"])===id);
+  const pack=(+bk["扣抵"]||0)>0;
+
+  if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆是課程包扣堂，會退回 1 堂。":""}`)) return;
+  if (act==="done" && !confirm(`標記 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 已上完課？\n會 LINE 通知學員${pack?"本堂完成與剩餘堂數":"本堂完成"}。`)) return;
+
+  b.disabled=true;
+  try {
+    const r=await api("setStatus",{id,status});
+    bk["狀態"]=status;
+    if (r.creditNote||act==="done") await load();
+    else renderBookings();
+
+    let msg=label;
+    if (r.stats) msg+=`・剩餘 ${r.stats.credits} 堂`;
+    else if (r.creditNote) msg+="・"+r.creditNote;
+    if (r.notified===false) msg+=`（LINE 通知未送出：${r.notifyError}）`;
+    toast(msg);
+  } catch(err) {
+    toast(err.message);
+    b.disabled=false;
+  }
+};
+
+$("bview").onchange=async e=>{
+  const s=e.target.closest("select[data-pay]");
+  if (!s) return;
+
+  const bk=S.bookings.find(x=>String(x["預約編號"])===s.dataset.pay);
 
   try {
-    return fn();
-  } finally {
-    lock.releaseLock();
+    await api("setPayment",{id:s.dataset.pay,method:s.value});
+    bk["付款方式"]=s.value;
+    toast(s.value?`已記錄收款：${s.value}`:"已改為未收款");
+  } catch(err) {
+    toast(err.message);
+    s.value=bk["付款方式"]||"";
   }
-}
+};
 
+/* 營業時間 */
+const H={ms:mStart(today()),sel:new Set(),pick:new Set(),extra:new Set()};
 
-/* ---------- 共用工具 ---------- */
-
-function getSpreadsheet_() {
-  var ss = SpreadsheetApp.getActive();
-
-  if (!ss) {
-    throw new Error(
-      '此專案未綁定試算表，請從試算表的「擴充功能 → Apps Script」建立'
-    );
-  }
-
-  return ss;
-}
-
-/**
- * 避免文字被試算表當成公式執行（公式注入）。
- */
-function safeText_(v) {
-  var s = String(v === null || v === undefined ? '' : v);
-
-  if (/^[=+\-@\t\r]/.test(s)) {
-    return "'" + s;
-  }
-
-  return s;
-}
-
-function pad_(n) {
-  return ('0' + n).slice(-2);
-}
-
-function normDate_(s) {
-  var m = String(s).match(
-    /(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})/
-  );
-
-  return m
-    ? m[1] + '-' + pad_(m[2]) + '-' + pad_(m[3])
-    : '';
-}
-
-function normSlots_(s) {
-  var out = [];
-  var re = /(\d{1,2}):(\d{2})/g;
-  var m;
-
-  while ((m = re.exec(String(s))) !== null) {
-    out.push(pad_(m[1]) + ':' + m[2]);
-  }
-
-  return out;
-}
-
-
-/* ---------- 試算表讀取 ---------- */
-
-function readTable_(key) {
-  var sh = getSpreadsheet_().getSheetByName(SHEETS[key]);
-
-  if (!sh) {
-    throw new Error('找不到分頁：' + SHEETS[key]);
-  }
-
-  var lr = sh.getLastRow();
-  var lc = sh.getLastColumn();
-
-  if (lc < 1) {
-    throw new Error('分頁沒有欄位：' + SHEETS[key]);
-  }
-
-  var vals = lr
-    ? sh.getRange(1, 1, lr, lc).getDisplayValues()
-    : [[]];
-
-  var headers = vals[0].map(function (h) {
-    return String(h).trim();
+function commonTimes() {
+  const c={};
+  S.hours.forEach(h=>{
+    if (h.slots) h.slots.split(",").forEach(t=>c[t]=(c[t]||0)+1);
   });
+  const top=Object.keys(c).sort((a,b)=>c[b]-c[a]).slice(0,8);
+  return [...new Set([...top,...H.extra,...H.pick])].sort();
+}
 
-  var rows = [];
+function renderHourList() {
+  const t=today(), rows=[];
 
-  for (var i = 1; i < vals.length; i++) {
-    if (vals[i].join('') === '') continue;
+  for (let d=1;d<=mDays(H.ms);d++) {
+    const ds=dayOf(H.ms,d);
+    if (ds<t) continue;
 
-    var o = { _row: i + 1 };
+    const h=S.hours.find(x=>x.date===ds);
+    if (!h) continue;
 
-    for (var j = 0; j < headers.length; j++) {
-      if (headers[j]) {
-        o[headers[j]] = vals[i][j];
-      }
+    const slots=h.slots?h.slots.split(","):[];
+
+    rows.push(`<div class="hl">
+      <div class="hd">${md(ds)}${dirty.has(ds)?' <span class="mute">（未儲存）</span>':""}</div>
+      <div class="chips">${slots.length
+        ? slots.map(s=>`<span class="chip x">${esc(s)}<button type="button" data-ds="${ds}" data-ts="${esc(s)}" aria-label="刪除 ${md(ds)} ${esc(s)}">×</button></span>`).join("")
+        : '<span class="mute">休息</span>'}</div>
+    </div>`);
+  }
+
+  $("hlist").innerHTML=rows.join("")||'<p class="mute none">這個月還沒有設定營業時間。</p>';
+}
+
+$("hlist").onclick=e=>{
+  const b=e.target.closest("button[data-ds]");
+  if (!b) return;
+
+  const ds=b.dataset.ds, ts=b.dataset.ts;
+  const booked=S.bookings.filter(x=>x["日期"]===ds&&x["時間"]===ts&&x["狀態"]!=="已取消");
+
+  if (booked.length && !confirm(`${md(ds)} ${ts} 已有 ${booked.length} 筆預約（${booked.map(x=>x["姓名"]).join("、")}）。\n刪除時段不會取消預約，仍要刪除嗎？`)) return;
+
+  const h=S.hours.find(x=>x.date===ds);
+  const left=h.slots.split(",").filter(x=>x!==ts).join(",");
+
+  dirty.set(ds,{date:ds,slots:left,note:null});
+  h.slots=left;
+  renderHours();
+  updBar();
+  toast(`已移除 ${md(ds)} ${ts}，記得按下方儲存`);
+};
+
+function renderHours() {
+  renderHourList();
+  const hm={};
+  S.hours.forEach(h=>hm[h.date]=h);
+  const t=today();
+
+  $("hlabel").textContent=mLabel(H.ms);
+  $("hp").disabled=H.ms<=mStart(t);
+
+  let g=WN.split("").map(c=>`<div class="wh">${c}</div>`).join("")
+    +"<div></div>".repeat(wd(H.ms));
+
+  for (let d=1;d<=mDays(H.ms);d++) {
+    const ds=dayOf(H.ms,d),h=hm[ds];
+    const n=h?(h.slots?h.slots.split(",").length:"休"):"";
+    g+=`<button class="c ${ds===t?"today":""} ${H.sel.has(ds)?"sel":""} ${dirty.has(ds)?"dy":""}" data-d="${ds}" ${ds<t?"disabled":""}><b>${d}</b><i>${n}</i></button>`;
+  }
+
+  $("hgrid").innerHTML=`<div class="grid">${g}</div>`;
+  $("hed").hidden=!H.sel.size;
+  $("hcount").textContent=`已選 ${H.sel.size} 天，請選擇時段`;
+  $("hchips").innerHTML=commonTimes().map(x=>`<button class="chip ${H.pick.has(x)?"on":""}" data-t="${x}">${x}</button>`).join("");
+}
+
+$("hp").onclick=()=>{
+  H.ms=addMonth(H.ms,-1);
+  renderHours();
+};
+$("hn").onclick=()=>{
+  H.ms=addMonth(H.ms,1);
+  renderHours();
+};
+
+$("hgrid").onclick=e=>{
+  const b=e.target.closest("button[data-d]");
+  if (!b) return;
+
+  const ds=b.dataset.d;
+  if (H.sel.has(ds)) H.sel.delete(ds);
+  else H.sel.add(ds);
+
+  if (H.sel.size===1) {
+    const h=S.hours.find(x=>x.date===[...H.sel][0]);
+    H.pick=new Set(h&&h.slots?h.slots.split(","):[]);
+  }
+  renderHours();
+};
+
+$("hsel").onclick=e=>{
+  const b=e.target.closest("button[data-s]");
+  if (!b) return;
+
+  const k=b.dataset.s,t=today();
+  H.sel.clear();
+
+  if (k!=="clear") {
+    for (let d=1;d<=mDays(H.ms);d++) {
+      const ds=dayOf(H.ms,d),w=wd(ds);
+      if (ds<t) continue;
+      if (k==="all"||(k==="wk"&&w>0&&w<6)||(k==="we"&&(w===0||w===6))) H.sel.add(ds);
     }
-
-    rows.push(o);
   }
+  renderHours();
+};
 
-  return {
-    sh: sh,
-    headers: headers,
-    rows: rows
-  };
-}
+$("hchips").onclick=e=>{
+  const b=e.target.closest("button[data-t]");
+  if (!b) return;
+  const t=b.dataset.t;
+  if (H.pick.has(t)) H.pick.delete(t);
+  else H.pick.add(t);
+  renderHours();
+};
 
+$("hAdd").onclick=()=>{
+  const v=$("hT").value;
+  if (!v) return toast("請先選一個時間");
+  H.extra.add(v);
+  H.pick.add(v);
+  renderHours();
+};
 
-function col_(headers, name) {
-  var i = headers.indexOf(name);
+function applyHours(list) {
+  const s=list.sort().join(","),n=H.sel.size;
 
-  if (i < 0) {
-    throw new Error('找不到欄位：' + name);
-  }
-
-  return i + 1;
-}
-
-
-/* ---------- 讀取全部資料 ---------- */
-
-/**
- * @param {string=} fromDate 選填，格式 YYYY-MM-DD。
- *   有帶才只回傳該日期（含）之後的預約，資料變多時可加快載入；
- *   沒帶則維持回傳全部。
- */
-function getAll_(fromDate) {
-  var from = fromDate ? normDate_(fromDate) : '';
-
-  var hours = readTable_('hours').rows.map(function (r) {
-    return {
-      date: normDate_(r['日期']),
-      slots: normSlots_(r['預約時段']).join(','),
-      note: r['備註'] || ''
-    };
-  }).filter(function (h) {
-    return h.date;
+  H.sel.forEach(ds=>{
+    dirty.set(ds,{date:ds,slots:s,note:null});
+    const ex=S.hours.find(h=>h.date===ds);
+    if (ex) ex.slots=s;
+    else S.hours.push({date:ds,slots:s,note:""});
   });
 
-  var bookings = readTable_('bookings').rows.map(function (r) {
-    r['日期'] = normDate_(r['日期']);
-    r['時間'] = normSlots_(r['時間'])[0] || r['時間'];
-    return r;
+  H.sel.clear();
+  renderHours();
+  updBar();
+  toast(`已套用到 ${n} 天，記得按下方儲存`);
+}
+
+$("hApply").onclick=()=>H.pick.size?applyHours([...H.pick]):toast("請先選時段，或按「設為休息」");
+$("hOff").onclick=()=>applyHours([]);
+
+/* 服務項目 */
+let SF="all";
+const SK=["服務名稱","價格","課程分鐘","緩衝分鐘","狀態"];
+const svcNorm=a=>JSON.stringify(a.map(s=>SK.map(k=>String(s[k]??""))));
+
+function renderServices() {
+  const h=svc.map((s,i)=>{
+    if ((SF==="on"&&s["狀態"]!=="啟用")||(SF==="off"&&s["狀態"]!=="停用")) return "";
+
+    const f=(k,l)=>`<label>${l}<input type="number" inputmode="numeric" data-i="${i}" data-k="${k}" value="${esc(s[k])}"></label>`;
+
+    return `<div class="card">
+      <input style="width:100%;font-weight:600" placeholder="服務名稱" data-i="${i}" data-k="服務名稱" value="${esc(s["服務名稱"])}">
+      <div class="f3">${f("價格","價格")}${f("課程分鐘","課程分鐘")}${f("緩衝分鐘","緩衝分鐘")}</div>
+      <div class="row sp">
+        <select data-i="${i}" data-k="狀態">
+          <option ${s["狀態"]==="啟用"?"selected":""}>啟用</option>
+          <option ${s["狀態"]==="停用"?"selected":""}>停用</option>
+        </select>
+        <button class="b g sm d" data-del="${i}">刪除</button>
+      </div>
+    </div>`;
+  }).join("");
+
+  $("slist").innerHTML=h||'<p class="mute">沒有符合的服務。</p>';
+}
+
+$("slist").oninput=$("slist").onchange=e=>{
+  const el=e.target.closest("[data-i]");
+  if (!el) return;
+  svc[+el.dataset.i][el.dataset.k]=el.value;
+  updBar();
+};
+
+$("slist").onclick=e=>{
+  const b=e.target.closest("button[data-del]");
+  if (!b) return;
+
+  const i=+b.dataset.del;
+  if (!confirm(`確定刪除「${svc[i]["服務名稱"]||"未命名服務"}」？\n已經存在的預約紀錄不受影響。`)) return;
+
+  svc.splice(i,1);
+  renderServices();
+  updBar();
+};
+
+$("sf").onclick=e=>{
+  const b=e.target.closest("button[data-f]");
+  if (!b) return;
+
+  SF=b.dataset.f;
+  document.querySelectorAll("#sf .pill").forEach(x=>{
+    x.classList.toggle("on",x===b);
+  });
+  renderServices();
+};
+
+$("sAdd").onclick=()=>{
+  svc.push({
+    "服務名稱":"",
+    "價格":"",
+    "課程分鐘":"",
+    "緩衝分鐘":"0",
+    "狀態":"啟用"
   });
 
-  if (from) {
-    bookings = bookings.filter(function (b) {
-      return b['日期'] >= from;
+  SF="all";
+  document.querySelectorAll("#sf .pill").forEach(x=>{
+    x.classList.toggle("on",x.dataset.f==="all");
+  });
+
+  renderServices();
+  updBar();
+  window.scrollTo(0,document.body.scrollHeight);
+};
+
+/* 會員：備註、剩餘堂數、課程包 */
+function renderMembers() {
+  const q=$("mq").value.trim().toLowerCase();
+  const list=S.members.filter(m=>!q||(m["姓名"]+m["電話"]).toLowerCase().includes(q));
+  const plans=(S.plans||[]).filter(p=>p["狀態"]!=="停用"&&parseInt(p["堂數"],10)>0);
+  const opts=plans.map(p=>`<option value="${esc(p["方案名稱"])}">${esc(p["方案名稱"])}｜$${esc(p["方案總價"])}</option>`).join("");
+
+  $("mlist").innerHTML=list.length?list.map(m=>{
+    const n=S.bookings.filter(b=>b["電話"]===m["電話"]&&b["狀態"]!=="已取消").length;
+    const cr=parseInt(m["剩餘堂數"],10)||0;
+    const bought=parseInt(m["購買堂數"],10)||0, used=parseInt(m["已上堂數"],10)||0;
+
+    return `<div class="card">
+      <div class="row sp">
+        <b>${esc(m["姓名"])}</b>
+        <span class="mute">預約 ${n} 次</span>
+      </div>
+      <div class="mute" style="margin-top:5px">
+        <a href="tel:${esc(fixPhone(m["電話"]))}">${esc(fixPhone(m["電話"]))}</a>
+       　首次 ${esc(m["首次預約日期"])}
+      </div>
+      <div class="row sp" style="margin-top:12px">
+        <div><span class="mute">剩餘</span><span class="credit">${cr}</span><span class="mute">堂　購買 ${bought}・已上 ${used}</span></div>
+        <div class="row">
+          <button class="b g sm" data-adj="-1" data-row="${m._row}" ${cr<1?"disabled":""}>−1 堂</button>
+          <button class="b g sm" data-adj="1" data-row="${m._row}">+1 堂</button>
+        </div>
+      </div>
+      ${plans.length?`<div class="row" style="margin-top:10px">
+        <select data-k="plan">${opts}</select>
+        <select data-k="method"><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select>
+        <button class="b sm" data-buy="1" data-row="${m._row}">新增方案</button>
+      </div>`:""}
+      <textarea rows="2" data-r="${m._row}" placeholder="寫下備註，例如偏好、提醒事項…">${esc(m["備註"])}</textarea>
+    </div>`;
+  }).join(""):'<p class="mute">沒有符合的會員。</p>';
+}
+
+$("mq").oninput=renderMembers;
+
+$("mlist").onchange=async e=>{
+  const t=e.target.closest("textarea[data-r]");
+  if (!t) return;
+
+  const m=S.members.find(x=>String(x._row)===t.dataset.r);
+  const note=t.value;
+
+  try {
+    await api("saveMember",{row:m._row,name:m["姓名"],phone:m["電話"],note});
+    m["備註"]=note;
+    toast("備註已儲存");
+  } catch(err) {
+    toast(err.message);
+  }
+};
+
+$("mlist").onclick=async e=>{
+  const b=e.target.closest("button[data-adj],button[data-buy]");
+  if (!b) return;
+
+  const m=S.members.find(x=>String(x._row)===b.dataset.row);
+  if (!m) return;
+
+  const who={row:m._row,name:m["姓名"],phone:m["電話"]};
+  b.disabled=true;
+
+  try {
+    if (b.dataset.buy) {
+      const box=b.parentElement;
+      const plan=box.querySelector('select[data-k="plan"]').value;
+      const method=box.querySelector('select[data-k="method"]').value;
+      if (!method) {
+        toast("請先選擇付款方式（刷卡／現金／轉帳）");
+        b.disabled=false;
+        return;
+      }
+      if (!confirm(`為 ${m["姓名"]} 新增「${plan}」（${method}）？\n購買堂數與剩餘堂數會立刻增加。`)) {
+        b.disabled=false;
+        return;
+      }
+      await api("addPackage",{...who,plan,method});
+      toast("已新增方案");
+    } else {
+      const delta=+b.dataset.adj;
+      if (!confirm(`${m["姓名"]} 的剩餘堂數 ${delta>0?"+":"−"}1？`)) {
+        b.disabled=false;
+        return;
+      }
+      await api("adjustSessions",{...who,delta,note:"後台手動調整"});
+      toast("已調整堂數");
+    }
+    await load();
+  } catch(err) {
+    toast(err.message);
+    b.disabled=false;
+  }
+};
+
+$("mAdd").onclick=async()=>{
+  const name=$("mn").value.trim(), phone=$("mp").value.trim();
+  if (!name||!phone) return toast("請輸入姓名與電話");
+
+  const b=$("mAdd");
+  b.disabled=true;
+
+  try {
+    await api("addMember",{name,phone});
+    $("mn").value="";
+    $("mp").value="";
+    await load();
+    toast("已新增會員");
+  } catch(err) {
+    toast(err.message);
+  }
+
+  b.disabled=false;
+};
+
+/* 系統設定：管理員寫入指令碼屬性（需要獨立的管理員密碼） */
+function showSettingsLock() {
+  $("slock").hidden = false;
+  $("sopen").hidden = true;
+  $("spw").value = "";
+  ["sOld","sNew","sNew2"].forEach(id => $(id).value = "");
+}
+
+async function unlockSettings() {
+  const pw = $("spw").value;
+  if (!pw) return toast("請輸入管理員密碼");
+
+  $("sUnlock").disabled = true;
+  try {
+    const r = await post("superLogin",{session,superPw:pw});
+    if (!r.ok) throw new Error(r.error || "解鎖失敗");
+
+    superToken = r.superToken;
+    $("spw").value = "";
+    $("slock").hidden = true;
+    $("sopen").hidden = false;
+    await loadProps();
+  } catch(e) {
+    toast(e.message);
+  }
+  $("sUnlock").disabled = false;
+}
+
+$("sUnlock").onclick = unlockSettings;
+$("spw").onkeydown = e => { if (e.key === "Enter") unlockSettings(); };
+$("sLock").onclick = () => { superToken = ""; showSettingsLock(); };
+
+async function loadProps() {
+  try {
+    const j = await api("getProps");
+    renderProps(j.props);
+  } catch(e) {
+    toast(e.message);
+  }
+}
+
+function renderProps(list) {
+  $("plist").innerHTML = list.map(p=>`<div class="card" data-k="${esc(p.key)}">
+    <div class="row sp">
+      <b>${esc(p.label)}</b>
+      <span class="tag ${p.set?"t-已預約":"t-待確認"}">${p.set?"已設定"+(p.tail?" ••••"+esc(p.tail):""):"未設定"}</span>
+    </div>
+    <p class="mute" style="margin:6px 0 12px">${esc(p.hint)}</p>
+    <input type="password" data-f="val" style="width:100%;margin-bottom:12px" placeholder="貼上新的值（只會寫入，不會再顯示）" autocomplete="off">
+    <div class="row">
+      <button class="b sm" data-set="1">儲存</button>
+      ${p.set?'<button class="b g sm d" data-clr="1">清除</button>':""}
+    </div>
+  </div>`).join("");
+}
+
+$("plist").onclick = async e => {
+  const b = e.target.closest("button[data-set],button[data-clr]");
+  if (!b) return;
+
+  const card = b.closest("[data-k]");
+  const key = card.dataset.k;
+  const value = card.querySelector('[data-f="val"]').value.trim();
+  const clearing = !!b.dataset.clr;
+
+  if (!clearing && !value) return toast("請貼上要寫入的內容");
+  if (clearing && !confirm("確定清除這個設定？清除後相關通知會停止。")) return;
+
+  b.disabled = true;
+  try {
+    const j = await api(clearing ? "clearProp" : "setProp",{key,value});
+    renderProps(j.props);
+    toast(clearing ? "已清除" : "已寫入");
+  } catch(err) {
+    toast(err.message);
+    b.disabled = false;
+  }
+};
+
+$("sReset").onclick = async () => {
+  if (!confirm("確定把後台登入密碼重置為初始密碼 12345？\n\n客戶下次要用 12345 登入並修改密碼（需要試算表「後台設定」B1 的設定碼）。\n目前登入中的人會被登出。")) return;
+
+  const b = $("sReset");
+  b.disabled = true;
+
+  try {
+    await api("resetStaffPassword");
+    superToken = "";
+    dropSession();
+    showLogin();
+    toast("已重置，請用初始密碼 12345 登入並修改");
+  } catch(e) {
+    toast(e.message);
+  }
+
+  b.disabled = false;
+};
+
+$("sChg").onclick = async () => {
+  const b = $("sChg");
+  b.disabled = true;
+
+  try {
+    const r = await api("changeSuperPassword",{
+      oldPassword: $("sOld").value,
+      newPassword: $("sNew").value,
+      confirm: $("sNew2").value
     });
+    superToken = r.superToken;
+    ["sOld","sNew","sNew2"].forEach(id => $(id).value = "");
+    toast("管理員密碼已更新");
+  } catch(e) {
+    toast(e.message);
   }
 
-  // 課程方案分頁還沒建立時不影響其他功能
-  var plans = [];
-
-  try {
-    plans = readTable_('plans').rows;
-  } catch (e) {}
-
-  return {
-    ok: true,
-    hours: hours,
-    services: readTable_('services').rows,
-    plans: plans,
-    bookings: bookings,
-    members: readTable_('members').rows
-  };
-}
-
-
-/* ---------- 營業時間 ---------- */
-
-function saveHours_(rows) {
-  var t = readTable_('hours');
-  var sh = t.sh;
-
-  var cDate = col_(t.headers, '日期');
-  var cSlot = col_(t.headers, '預約時段');
-  var cNote = col_(t.headers, '備註');
-
-  var index = {};
-
-  t.rows.forEach(function (r) {
-    index[normDate_(r['日期'])] = r._row;
-  });
-
-  var last = Math.max(sh.getLastRow(), 2);
-  var sample = sh.getRange(last, cDate);
-  var sampleIsDate = sample.getValue() instanceof Date;
-
-  var sep = sample.getDisplayValue().indexOf('/') >= 0
-    ? '/'
-    : '-';
-
-  var n = 0;
-
-  rows.forEach(function (r) {
-    var d = normDate_(r.date);
-
-    if (!d) return;
-
-    var slots = normSlots_(r.slots).join(',');
-    var row = index[d];
-
-    if (!row) {
-      row = sh.getLastRow() + 1;
-
-      var p = d.split('-');
-      var c = sh.getRange(row, cDate);
-
-      if (sampleIsDate) {
-        c.setNumberFormat(sample.getNumberFormat());
-        c.setValue(new Date(+p[0], +p[1] - 1, +p[2]));
-      } else {
-        c.setNumberFormat('@');
-        c.setValue(
-          p[0] + sep + p[1] + sep + p[2]
-        );
-      }
-
-      index[d] = row;
-    }
-
-    var s = sh.getRange(row, cSlot);
-
-    s.setNumberFormat('@');
-    s.setValue(slots);
-
-    if (r.note !== null && r.note !== undefined) {
-      sh.getRange(row, cNote).setValue(safeText_(r.note));
-    }
-
-    n++;
-  });
-
-  return {
-    ok: true,
-    saved: n
-  };
-}
-
-
-/* ---------- 服務項目 ---------- */
-
-function saveServices_(list) {
-  var t = readTable_('services');
-  var sh = t.sh;
-
-  var keys = [
-    '服務名稱',
-    '價格',
-    '課程分鐘',
-    '緩衝分鐘',
-    '狀態'
-  ];
-
-  var cols = keys.map(function (k) {
-    return col_(t.headers, k);
-  });
-
-  // ---- 1. 先完整驗證，驗證失敗不會動到試算表 ----
-  var seen = {};
-
-  list.forEach(function (s, i) {
-    var name = String(s['服務名稱'] || '').trim();
-
-    if (!name) {
-      throw new Error(
-        '第 ' + (i + 1) + ' 項缺少服務名稱'
-      );
-    }
-
-    var key = name.toLowerCase();
-
-    if (seen[key]) {
-      throw new Error(
-        '服務名稱重複：「' + name + '」（第 ' +
-        seen[key] + ' 項與第 ' + (i + 1) + ' 項）'
-      );
-    }
-
-    seen[key] = i + 1;
-    s['服務名稱'] = name;
-
-    ['價格', '課程分鐘', '緩衝分鐘'].forEach(function (k) {
-      var v = Number(s[k]);
-
-      if (s[k] === '' || s[k] === null || s[k] === undefined ||
-          isNaN(v) || v < 0) {
-        throw new Error(
-          '第 ' + (i + 1) + ' 項的「' + k + '」要填數字'
-        );
-      }
-
-      s[k] = v;
-    });
-
-    if (['啟用', '停用'].indexOf(s['狀態']) < 0) {
-      throw new Error(
-        '第 ' + (i + 1) + ' 項的狀態只能是啟用或停用'
-      );
-    }
-  });
-
-  // ---- 2. 先寫入新資料（覆蓋舊資料），不先清空 ----
-  var oldLast = sh.getLastRow();
-
-  if (list.length) {
-    keys.forEach(function (k, j) {
-      sh.getRange(2, cols[j], list.length, 1)
-        .setValues(list.map(function (s) {
-          return [
-            k === '服務名稱' ? safeText_(s[k]) : s[k]
-          ];
-        }));
-    });
-  }
-
-  // ---- 3. 最後才清掉多出來的舊列 ----
-  var firstExtra = list.length + 2;
-
-  if (oldLast >= firstExtra) {
-    keys.forEach(function (k, j) {
-      sh.getRange(
-        firstExtra,
-        cols[j],
-        oldLast - firstExtra + 1,
-        1
-      ).clearContent();
-    });
-  }
-
-  SpreadsheetApp.flush();
-
-  return {
-    ok: true,
-    saved: list.length
-  };
-}
-
-
-/* ---------- 預約狀態 ---------- */
-
-function setStatus_(id, status) {
-  if (
-    [STATUS_PENDING, STATUS_CONFIRM, STATUS_DONE, STATUS_CANCEL]
-      .indexOf(status) < 0
-  ) {
-    throw new Error('不允許的狀態');
-  }
-
-  if (id === null || id === undefined || String(id) === '') {
-    throw new Error('缺少預約編號');
-  }
-
-  var t = readTable_('bookings');
-  var cStatus = col_(t.headers, '狀態');
-  var cNote = t.headers.indexOf('系統備註') + 1;
-
-  for (var i = 0; i < t.rows.length; i++) {
-    var row = t.rows[i];
-
-    if (String(row['預約編號']) !== String(id)) {
-      continue;
-    }
-
-    var prev = row['狀態'];
-
-    /*
-     * 「扣抵」＞ 0 表示這筆預約是用課程包扣 1 堂：
-     * - 取消：退回 1 堂；取消後恢復：再扣 1 堂
-     * - 完成：已上堂數 +1；取消完成：已上堂數 −1
-     */
-    var info = null;
-
-    if (num_(row['扣抵']) > 0) {
-      var cd = 0;
-      var ud = 0;
-
-      if (prev !== STATUS_CANCEL && status === STATUS_CANCEL) cd = 1;
-      else if (prev === STATUS_CANCEL && status !== STATUS_CANCEL) cd = -1;
-
-      if (prev !== STATUS_DONE && status === STATUS_DONE) ud = 1;
-      else if (prev === STATUS_DONE && status !== STATUS_DONE) ud = -1;
-
-      if (cd || ud) info = changeCredits_(row['電話'], cd, ud);
-    }
-
-    t.sh.getRange(row._row, cStatus).setValue(status);
-
-    var res = { ok: true };
-
-    if (info && info.text) {
-      res.creditNote = info.text;
-
-      if (cNote) {
-        t.sh.getRange(row._row, cNote).setValue(status + '：' + info.text);
-      }
-    }
-
-    // 首次確認時才發送通知
-    // （已預約 → 待確認 → 已預約 會再通知一次，屬預期行為）
-    if (
-      status === STATUS_CONFIRM &&
-      prev !== STATUS_CONFIRM &&
-      prev !== STATUS_DONE
-    ) {
-      var n = notifyConfirm_(row);
-
-      res.notified = n.ok;
-
-      if (!n.ok) {
-        res.notifyError = n.error;
-      }
-    }
-
-    // 上完課：通知學員剩餘堂數；教室端從回傳的 stats 與後台畫面看到
-    if (status === STATUS_DONE && prev !== STATUS_DONE) {
-      var stats = info && info.found ? info : getMemberStats_(row['電話']);
-      var d = notifyDone_(row, stats);
-
-      res.stats = stats;
-      res.notified = d.ok;
-
-      if (!d.ok) {
-        res.notifyError = d.error;
-      }
-    }
-
-    return res;
-  }
-
-  throw new Error('找不到這筆預約');
-}
-
-
-/** 填寫收款方式（刷卡／現金／轉帳；空字串＝未收款） */
-function setPayment_(id, method) {
-  method = String(method || '');
-
-  if (method && PAY_METHODS.indexOf(method) < 0) {
-    throw new Error('不允許的付款方式');
-  }
-
-  var t = readTable_('bookings');
-  var cPay = colOf_(t, '付款方式', true);
-
-  for (var i = 0; i < t.rows.length; i++) {
-    var row = t.rows[i];
-
-    if (String(row['預約編號']) !== String(id)) continue;
-
-    if (num_(row['扣抵']) > 0) {
-      throw new Error('這筆是課程包扣堂，不需要另外收款');
-    }
-
-    t.sh.getRange(row._row, cPay).setValue(method);
-
-    return { ok: true };
-  }
-
-  throw new Error('找不到這筆預約');
-}
-
-
-/* ---------- LINE 預約確認通知 ---------- */
-
-function notifyConfirm_(b) {
-  var token = PropertiesService
-    .getScriptProperties()
-    .getProperty('LINE_TOKEN');
-
-  var uid = String(b['LINE UID'] || '').trim();
-
-  if (!token) {
-    return {
-      ok: false,
-      error: '尚未設定 LINE_TOKEN'
-    };
-  }
-
-  if (!uid) {
-    return {
-      ok: false,
-      error: '這筆預約沒有 LINE UID'
-    };
-  }
-
-  var normalizedDate = normDate_(b['日期']);
-
-  if (!normalizedDate) {
-    return {
-      ok: false,
-      error: '預約日期格式不正確'
-    };
-  }
-
-  var d = normalizedDate.split('-');
-
-  var wd = '日一二三四五六'[
-    new Date(
-      Date.UTC(+d[0], +d[1] - 1, +d[2])
-    ).getUTCDay()
-  ];
-
-  var dateText =
-    d[0] + '/' + d[1] + '/' + d[2] + '（' + wd + '）';
-
-  var timeText =
-    normSlots_(b['時間'])[0] || String(b['時間'] || '');
-
-  var isPack = num_(b['扣抵']) > 0;
-
-  var rows = [
-    ['日期', dateText],
-    ['時間', timeText],
-    ['課程', String(b['服務'] || '').replace(/^(體驗課|正式課程)[｜|]\s*/, '')],
-    ['費用', isPack ? '課程包扣 1 堂' : 'NT$ ' + (b['價格'] || '0')]
-  ];
-
-  /*
-   * LINE Flex Message
-   */
-
-  var bubble = {
-    type: 'bubble',
-    size: 'mega',
-
-    // 上方咖啡色標題區
-    header: {
-      type: 'box',
-      layout: 'vertical',
-      backgroundColor: FLEX.primary,
-      paddingTop: '24px',
-      paddingBottom: '24px',
-      paddingStart: '24px',
-      paddingEnd: '24px',
-      spacing: 'sm',
-      contents: [
-        {
-          type: 'text',
-          text: STUDIO_NAME,
-          size: 'sm',
-          color: FLEX.lightAccent,
-          weight: 'bold'
-        },
-        {
-          type: 'text',
-          text: '預約已確認',
-          size: 'xl',
-          weight: 'bold',
-          color: FLEX.light,
-          margin: '8px',
-          wrap: true
-        }
-      ]
-    },
-
-    // 下方米色預約資訊區
-    body: {
-      type: 'box',
-      layout: 'vertical',
-      backgroundColor: FLEX.background,
-      paddingTop: '20px',
-      paddingBottom: '20px',
-      paddingStart: '24px',
-      paddingEnd: '24px',
-      spacing: 'md',
-      contents: [
-        {
-          type: 'separator',
-          color: FLEX.line
-        }
-      ].concat(
-        rows.map(function (r) {
-          return {
-            type: 'box',
-            layout: 'baseline',
-            spacing: 'sm',
-            contents: [
-              {
-                type: 'text',
-                text: String(r[0]),
-                size: 'sm',
-                color: FLEX.label,
-                flex: 2,
-                wrap: true
-              },
-              {
-                type: 'text',
-                text: String(r[1]),
-                size: 'sm',
-                color: FLEX.text,
-                flex: 5,
-                wrap: true
-              }
-            ]
-          };
-        })
-      ).concat([
-        {
-          type: 'separator',
-          color: FLEX.line,
-          margin: 'md'
-        },
-        {
-          type: 'text',
-          text: '期待見到你。如需更改時間，請直接回覆此訊息。',
-          size: 'xs',
-          color: FLEX.label,
-          wrap: true,
-          margin: 'md'
-        }
-      ])
-    },
-
-    // 與服務卡片一致的米色 footer
-    footer: {
-      type: 'box',
-      layout: 'vertical',
-      backgroundColor: FLEX.background,
-      paddingAll: '0px',
-      contents: []
-    },
-
-    // 各區塊背景統一
-    styles: {
-      header: {
-        backgroundColor: FLEX.primary
-      },
-      body: {
-        backgroundColor: FLEX.background
-      },
-      footer: {
-        backgroundColor: FLEX.background
-      }
-    }
-  };
-
-  var payload = {
-    to: uid,
-    messages: [
-      {
-        type: 'flex',
-        altText: '你的預約已確認：' + dateText + ' ' + timeText,
-        contents: bubble
-      }
-    ]
-  };
-
-  var resp;
-
-  try {
-    resp = UrlFetchApp.fetch(
-      'https://api.line.me/v2/bot/message/push',
-      {
-        method: 'post',
-        contentType: 'application/json',
-        headers: {
-          Authorization: 'Bearer ' + token
-        },
-        payload: JSON.stringify(payload),
-        muteHttpExceptions: true
-      }
-    );
-  } catch (err) {
-    return {
-      ok: false,
-      error: 'LINE 發送失敗：' + String(err.message || err)
-    };
-  }
-
-  if (
-    resp.getResponseCode() >= 200 &&
-    resp.getResponseCode() < 300
-  ) {
-    return { ok: true };
-  }
-
-  var msg = '';
-
-  try {
-    msg = JSON.parse(resp.getContentText()).message;
-  } catch (e) {}
-
-  return {
-    ok: false,
-    error: 'LINE 回應 ' + resp.getResponseCode() +
-      (msg ? '：' + msg : '')
-  };
-}
-
-
-/* ---------- LINE 課程完成通知（含剩餘堂數） ---------- */
-
-function notifyDone_(b, stats) {
-  var token = PropertiesService
-    .getScriptProperties()
-    .getProperty('LINE_TOKEN');
-
-  var uid = String(b['LINE UID'] || '').trim();
-
-  if (!token) return { ok: false, error: '尚未設定 LINE_TOKEN' };
-  if (!uid) return { ok: false, error: '這筆預約沒有 LINE UID' };
-
-  var d = normDate_(b['日期']).split('-');
-  var dateText = d.length === 3 ? d[0] + '/' + d[1] + '/' + d[2] : String(b['日期'] || '');
-  var timeText = normSlots_(b['時間'])[0] || String(b['時間'] || '');
-
-  var rows = [
-    ['日期', dateText],
-    ['時間', timeText],
-    ['課程', String(b['服務'] || '').replace(/^(體驗課|正式課程)[｜|]\s*/, '')]
-  ];
-
-  var hasStats = stats && (stats.purchased > 0 || stats.credits > 0 || stats.used > 0);
-
-  if (hasStats) {
-    rows.push(['購買堂數', stats.purchased + ' 堂']);
-    rows.push(['已上堂數', stats.used + ' 堂']);
-    rows.push(['剩餘堂數', stats.credits + ' 堂']);
-  }
-
-  var bubble = {
-    type: 'bubble',
-    size: 'mega',
-    header: {
-      type: 'box',
-      layout: 'vertical',
-      backgroundColor: FLEX.primary,
-      paddingTop: '24px',
-      paddingBottom: '24px',
-      paddingStart: '24px',
-      paddingEnd: '24px',
-      contents: [
-        { type: 'text', text: STUDIO_NAME, size: 'sm', color: FLEX.lightAccent, weight: 'bold' },
-        { type: 'text', text: '本堂課程已完成', size: 'xl', weight: 'bold', color: FLEX.light, margin: '8px', wrap: true }
-      ]
-    },
-    body: {
-      type: 'box',
-      layout: 'vertical',
-      backgroundColor: FLEX.background,
-      paddingTop: '20px',
-      paddingBottom: '20px',
-      paddingStart: '24px',
-      paddingEnd: '24px',
-      spacing: 'md',
-      contents: [{ type: 'separator', color: FLEX.line }].concat(
-        rows.map(function (r) {
-          return {
-            type: 'box',
-            layout: 'baseline',
-            spacing: 'sm',
-            contents: [
-              { type: 'text', text: String(r[0]), size: 'sm', color: FLEX.label, flex: 2 },
-              { type: 'text', text: String(r[1]), size: 'sm', color: FLEX.text, flex: 5, wrap: true }
-            ]
-          };
-        })
-      ).concat([
-        { type: 'separator', color: FLEX.line, margin: 'md' },
-        {
-          type: 'text',
-          text: hasStats
-            ? '剩餘堂數已扣除您已預約、尚未上課的堂數。想隨時查詢，可以在聊天室輸入「我的堂數」。'
-            : '謝謝您，期待下次見面。',
-          size: 'xs',
-          color: FLEX.label,
-          wrap: true,
-          margin: 'md'
-        }
-      ])
-    },
-    styles: {
-      header: { backgroundColor: FLEX.primary },
-      body: { backgroundColor: FLEX.background }
-    }
-  };
-
-  var resp;
-
-  try {
-    resp = UrlFetchApp.fetch('https://api.line.me/v2/bot/message/push', {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { Authorization: 'Bearer ' + token },
-      payload: JSON.stringify({
-        to: uid,
-        messages: [{ type: 'flex', altText: '本堂課程已完成｜' + STUDIO_NAME, contents: bubble }]
-      }),
-      muteHttpExceptions: true
-    });
-  } catch (err) {
-    return { ok: false, error: 'LINE 發送失敗：' + String(err.message || err) };
-  }
-
-  if (resp.getResponseCode() >= 200 && resp.getResponseCode() < 300) {
-    return { ok: true };
-  }
-
-  var msg = '';
-
-  try { msg = JSON.parse(resp.getContentText()).message; } catch (e) {}
-
-  return {
-    ok: false,
-    error: 'LINE 回應 ' + resp.getResponseCode() + (msg ? '：' + msg : '')
-  };
-}
-
-
-/* ---------- 會員備註 ---------- */
-
-function saveMember_(r) {
-  var t = readTable_('members');
-  var cNote = col_(t.headers, '備註');
-
-  for (var i = 0; i < t.rows.length; i++) {
-    var m = t.rows[i];
-
-    if (
-      m._row === Number(r.row) &&
-      String(m['電話']) === String(r.phone) &&
-      String(m['姓名']) === String(r.name)
-    ) {
-      t.sh.getRange(m._row, cNote).setValue(safeText_(r.note));
-
-      return { ok: true };
-    }
-  }
-
-  throw new Error('會員資料已有變動，請重新整理後再試');
-}
-
-
-/* ---------- 課程包（包堂）---------- */
-
-// 只留數字、去掉國碼 886 與開頭的 0，用來比對電話
-function phoneKey_(phone) {
-  var d = String(phone === null || phone === undefined ? '' : phone).replace(/\D/g, '');
-
-  if (d.indexOf('886') === 0 && d.length >= 11) d = d.slice(3);
-
-  return d.replace(/^0+/, '');
-}
-
-// 顯示值可能帶千分位（7,400），先清掉再轉數字
-function num_(v) {
-  return Number(String(v === null || v === undefined ? '' : v).replace(/[^\d.\-]/g, '')) || 0;
-}
-
-function toInt_(v) {
-  return Math.max(0, Math.floor(num_(v)));
-}
-
-/** 用標題找欄位（1 起算）；required 為 true 時找不到就丟錯 */
-function colOf_(t, title, required) {
-  var i = t.headers.indexOf(title);
-
-  if (i < 0) {
-    if (required) {
-      throw new Error(
-        '「' + t.sh.getName() + '」缺少「' + title + '」欄位，請先在 Apps Script 手動執行一次 setupMoonCoreSheets'
-      );
-    }
-
-    return 0;
-  }
-
-  return i + 1;
-}
-
-function findMemberRow_(t, r) {
-  for (var i = 0; i < t.rows.length; i++) {
-    var m = t.rows[i];
-
-    if (
-      m._row === Number(r.row) &&
-      String(m['電話']) === String(r.phone) &&
-      String(m['姓名']) === String(r.name)
-    ) {
-      return m;
-    }
-  }
-
-  throw new Error('會員資料已有變動，請重新整理後再試');
-}
-
-/** 讀會員目前的堂數統計；找不到或欄位還沒建立就回 null */
-function getMemberStats_(phone) {
-  try {
-    var t = readTable_('members');
-    var key = phoneKey_(phone);
-
-    for (var i = 0; i < t.rows.length; i++) {
-      var m = t.rows[i];
-
-      if (phoneKey_(m['電話']) === key) {
-        return {
-          credits: toInt_(m['剩餘堂數']),
-          purchased: toInt_(m['購買堂數']),
-          used: toInt_(m['已上堂數'])
-        };
-      }
-    }
-  } catch (e) {}
-
-  return null;
-}
-
-// 寫一筆到「購買紀錄」（沒有這個分頁就略過，不影響加堂）
-function logPurchase_(name, phone, planName, sessions, amount, note, method) {
-  var sh = getSpreadsheet_().getSheetByName(SHEETS.purchases);
-
-  if (!sh) return;
-
-  var lc = Math.max(sh.getLastColumn(), 1);
-  var heads = sh.getRange(1, 1, 1, lc).getValues()[0].map(function (h) {
-    return String(h).trim();
-  });
-
-  var vals = {
-    '時間': new Date(),
-    '姓名': safeText_(name),
-    '電話': '',
-    '方案': planName,
-    '堂數': sessions,
-    '金額': amount,
-    '備註': safeText_(note || ''),
-    '付款方式': method || ''
-  };
-
-  sh.appendRow(heads.map(function (h) {
-    return Object.prototype.hasOwnProperty.call(vals, h) ? vals[h] : '';
-  }));
-
-  var pi = heads.indexOf('電話');
-
-  if (pi >= 0) {
-    var c = sh.getRange(sh.getLastRow(), pi + 1);
-
-    c.setNumberFormat('@');
-    c.setValue(String(phone));
-  }
-}
-
-/**
- * 取消／恢復／完成「課程包扣堂」預約時，同步調整堂數。
- * cd：剩餘堂數的變化（+1 退回、−1 再扣）；ud：已上堂數的變化。
- * 回傳 { found, credits, purchased, used, text }。
- */
-function changeCredits_(phone, cd, ud) {
-  var t = readTable_('members');
-  var cCredit = colOf_(t, '剩餘堂數', true);
-  var cUsed = colOf_(t, '已上堂數', true);
-  var key = phoneKey_(phone);
-
-  for (var i = 0; i < t.rows.length; i++) {
-    var m = t.rows[i];
-
-    if (phoneKey_(m['電話']) !== key) continue;
-
-    var cur = toInt_(m['剩餘堂數']);
-    var used = toInt_(m['已上堂數']);
-
-    if (cd < 0 && cur < 1) {
-      throw new Error('這位會員剩餘堂數不足，無法恢復這筆預約，請先幫他加堂');
-    }
-
-    var next = cur + cd;
-    var nextUsed = Math.max(0, used + ud);
-
-    if (cd) t.sh.getRange(m._row, cCredit).setValue(next);
-    if (ud) t.sh.getRange(m._row, cUsed).setValue(nextUsed);
-
-    var parts = [];
-
-    if (cd > 0) parts.push('已退回 1 堂');
-    if (cd < 0) parts.push('已扣 1 堂');
-    if (ud > 0) parts.push('已上堂數 +1');
-    if (ud < 0) parts.push('已上堂數 −1');
-
-    return {
-      found: true,
-      credits: next,
-      purchased: toInt_(m['購買堂數']),
-      used: nextUsed,
-      text: parts.join('，') + '；剩餘 ' + next + ' 堂'
-    };
-  }
-
-  if (cd > 0) {
-    return { found: false, text: '找不到會員資料，請手動補回 1 堂' };
-  }
-
-  if (cd < 0) {
-    throw new Error('找不到會員資料，無法扣堂');
-  }
-
-  return { found: false, text: '' };
-}
-
-/** 幫會員新增一個課程方案：購買堂數與剩餘堂數都加上去，並記錄收款方式 */
-function addPackage_(r) {
-  var method = String(r.method || '');
-
-  if (PAY_METHODS.indexOf(method) < 0) {
-    throw new Error('請選擇付款方式（刷卡／現金／轉帳）');
-  }
-
-  var t = readTable_('members');
-  var cCredit = colOf_(t, '剩餘堂數', true);
-  var cBought = colOf_(t, '購買堂數', true);
-  var m = findMemberRow_(t, r);
-
-  var plan = readTable_('plans').rows.filter(function (p) {
-    return String(p['方案名稱']).trim() === String(r.plan || '').trim() &&
-      String(p['狀態']).trim() !== '停用';
-  })[0];
-
-  if (!plan) throw new Error('找不到這個方案，請重新整理後再試');
-
-  var sessions = Math.floor(num_(plan['堂數']));
-  var total = num_(plan['方案總價']);
-
-  if (!(sessions > 0)) throw new Error('這個方案的堂數不正確');
-
-  var next = toInt_(m['剩餘堂數']) + sessions;
-  var bought = toInt_(m['購買堂數']) + sessions;
-
-  t.sh.getRange(m._row, cCredit).setValue(next);
-  t.sh.getRange(m._row, cBought).setValue(bought);
-  logPurchase_(m['姓名'], m['電話'], plan['方案名稱'], sessions, total, '', method);
-
-  return { ok: true, credits: next, purchased: bought };
-}
-
-/** 手動加減剩餘堂數（補償、更正、舊學員匯入等；不改「購買堂數」） */
-function adjustSessions_(r) {
-  var delta = parseInt(r.delta, 10);
-
-  if (!isFinite(delta) || delta === 0 || Math.abs(delta) > 100) {
-    throw new Error('調整的堂數不正確');
-  }
-
-  var t = readTable_('members');
-  var cCredit = colOf_(t, '剩餘堂數', true);
-  var m = findMemberRow_(t, r);
-  var next = toInt_(m['剩餘堂數']) + delta;
-
-  if (next < 0) throw new Error('剩餘堂數不能小於 0');
-
-  t.sh.getRange(m._row, cCredit).setValue(next);
-  logPurchase_(m['姓名'], m['電話'], '手動調整', delta, 0, r.note || '後台手動調整', '');
-
-  return { ok: true, credits: next };
-}
-
-/** 後台手動新增會員（還沒預約過、直接購買課程包的學員） */
-function addMember_(r) {
-  var name = String(r.name || '').trim();
-  var phone = String(r.phone || '').trim().replace(/[-\s]/g, '');
-
-  if (!name) throw new Error('請輸入姓名');
-  if (!/^\+?\d{8,15}$/.test(phone)) throw new Error('請輸入正確的電話號碼');
-
-  var t = readTable_('members');
-  var key = phoneKey_(phone);
-
-  t.rows.forEach(function (m) {
-    if (phoneKey_(m['電話']) === key) {
-      throw new Error('這個電話已經是會員了（' + m['姓名'] + '）');
-    }
-  });
-
-  var row = t.headers.map(function () { return ''; });
-
-  function put(h, v) {
-    var i = t.headers.indexOf(h);
-    if (i >= 0) row[i] = v;
-  }
-
-  put('姓名', safeText_(name));
-  put('建立時間', new Date());
-  put('剩餘堂數', 0);
-  put('購買堂數', 0);
-  put('已上堂數', 0);
-
-  var next = t.sh.getLastRow() + 1;
-
-  t.sh.getRange(next, 1, 1, row.length).setValues([row]);
-
-  var ci = t.headers.indexOf('電話');
-
-  if (ci >= 0) {
-    var c = t.sh.getRange(next, ci + 1);
-
-    c.setNumberFormat('@');
-    c.setValue(phone);
-  }
-
-  return { ok: true };
-}
-
-
-/* ---------- 獨立的管理員密碼 ---------- */
-
-/*
- * 管理員密碼（ADMIN2_PW_HASH / ADMIN2_PW_SALT）：
- * - 和後台登入密碼互相獨立，只用來解鎖「系統設定」。
- * - 沒有預設密碼：第一次請在 Apps Script 編輯器手動執行 initSuperAdminPassword()，
- *   密碼會出現在「執行記錄」，登入後請馬上改成自己的。
- * - 解鎖後發 30 分鐘的管理員 token，且綁定當下的後台登入 session；
- *   後台登出、換管理員密碼、離開設定頁，token 都會失效。
- * - 忘記時：在編輯器執行 resetSuperAdminPassword()，再執行 initSuperAdminPassword()。
- */
-
-var SUPER_MIN_LEN = 10;
-var SUPER_SESSION_SECONDS = 1800;
-
-function superSet_() {
-  var p = PropertiesService.getScriptProperties();
-
-  return !!(p.getProperty('ADMIN2_PW_HASH') && p.getProperty('ADMIN2_PW_SALT'));
-}
-
-function superStamp_() {
-  return PropertiesService.getScriptProperties().getProperty('ADMIN2_PW_SALT') || '';
-}
-
-function verifySuper_(pw) {
-  var p = PropertiesService.getScriptProperties();
-  var hash = p.getProperty('ADMIN2_PW_HASH');
-  var salt = p.getProperty('ADMIN2_PW_SALT');
-
-  pw = String(pw || '');
-
-  if (!pw || !hash || !salt) return false;
-
-  return safeEqual_(hashPw_(salt, pw), hash);
-}
-
-function saveSuperPassword_(pw) {
-  var salt = Utilities.getUuid();
-
-  PropertiesService.getScriptProperties().setProperties({
-    ADMIN2_PW_SALT: salt,
-    ADMIN2_PW_HASH: hashPw_(salt, pw)
-  });
-}
-
-function checkSuperNotLocked_() {
-  if (Number(CacheService.getScriptCache().get('sfails') || 0) >= MAX_FAILS) {
-    throw fail_('管理員密碼嘗試次數過多，請 10 分鐘後再試', 'LOCKED');
-  }
-}
-
-function addSuperFail_() {
-  var cache = CacheService.getScriptCache();
-
-  cache.put('sfails', String(Number(cache.get('sfails') || 0) + 1), LOCK_SECONDS);
-}
-
-function newSuperToken_(session) {
-  var token =
-    Utilities.getUuid().replace(/-/g, '') +
-    Utilities.getUuid().replace(/-/g, '');
-
-  CacheService.getScriptCache()
-    .put('super:' + token, superStamp_() + '|' + String(session || ''), SUPER_SESSION_SECONDS);
-
-  return token;
-}
-
-/** 用管理員密碼解鎖「系統設定」 */
-function superLogin_(r) {
-  if (!superSet_()) {
-    throw fail_(
-      '尚未設定管理員密碼：請先在 Apps Script 編輯器執行一次 initSuperAdminPassword，再到「執行記錄」查看密碼',
-      'SUPER_NOT_SET'
-    );
-  }
-
-  checkSuperNotLocked_();
-
-  if (!verifySuper_(r.superPw)) {
-    addSuperFail_();
-    throw fail_('管理員密碼錯誤', 'BAD_SUPER');
-  }
-
-  CacheService.getScriptCache().remove('sfails');
-
-  return { ok: true, superToken: newSuperToken_(r.session) };
-}
-
-/** 呼叫需要管理員權限的動作前檢查 token（必須搭配同一個後台 session） */
-function requireSuper_(r) {
-  var v = CacheService.getScriptCache().get('super:' + String(r.superToken || ''));
-
-  if (!r.session || !v || v !== superStamp_() + '|' + String(r.session)) {
-    throw fail_('管理員驗證已過期，請重新輸入管理員密碼', 'SUPER_EXPIRED');
-  }
-}
-
-function changeSuperPassword_(r) {
-  requireSuper_(r);
-  checkSuperNotLocked_();
-
-  if (!verifySuper_(r.oldPassword)) {
-    addSuperFail_();
-    throw fail_('目前的管理員密碼不正確', 'BAD_SUPER');
-  }
-
-  var pw = String(r.newPassword || '');
-
-  if (pw.length < SUPER_MIN_LEN) {
-    throw new Error('新的管理員密碼至少要 ' + SUPER_MIN_LEN + ' 個字元');
-  }
-
-  if (pw.length > MAX_PW_LEN) throw new Error('新密碼太長了');
-  if (pw !== String(r.confirm || '')) throw new Error('兩次輸入的新密碼不一致');
-  if (verifyPassword_(pw)) throw new Error('管理員密碼不能和後台登入密碼相同');
-
-  saveSuperPassword_(pw);
-
-  // 換了新的 salt，舊 token 全部失效；這個 session 直接發新的
-  return { ok: true, superToken: newSuperToken_(r.session) };
-}
-
-/**
- * 第一次使用：在 Apps Script 編輯器手動執行。
- * 會產生一組隨機的管理員密碼，只顯示在「執行記錄」，請登入後立刻修改。
- */
-function initSuperAdminPassword() {
-  if (superSet_()) {
-    throw new Error('管理員密碼已經設定過了。如果要重設，請先執行 resetSuperAdminPassword()');
-  }
-
-  var pw = (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '').slice(0, 20);
-
-  saveSuperPassword_(pw);
-  CacheService.getScriptCache().remove('sfails');
-
-  console.log('管理員密碼（只會顯示這一次，請登入後台「系統設定」後立刻修改）：' + pw);
-}
-
-/** 忘記管理員密碼時，在編輯器手動執行；之後再執行 initSuperAdminPassword() */
-function resetSuperAdminPassword() {
-  var p = PropertiesService.getScriptProperties();
-
-  p.deleteProperty('ADMIN2_PW_HASH');
-  p.deleteProperty('ADMIN2_PW_SALT');
-  CacheService.getScriptCache().remove('sfails');
-}
-
-
-/* ---------- 系統設定：管理員寫入指令碼屬性 ---------- */
-
-/*
- * 只能寫入 EDITABLE_PROPS 白名單內的屬性，而且：
- * - 值只能寫入、不會再回傳（畫面只顯示「已設定」與最後 4 碼）
- * - 要先用「管理員密碼」解鎖（和後台登入密碼是兩組獨立的密碼，
- *   沒有預設值，第一次在 Apps Script 編輯器執行 initSuperAdminPassword() 產生）
- * 注意：這裡只能改「後台這個專案」的指令碼屬性；
- * 前台專案（CHANNEL_ACCESS_TOKEN 等）是另一個 GAS 專案，要在它自己的專案設定裡改。
- */
-
-function getProps_() {
-  var p = PropertiesService.getScriptProperties();
-
-  return {
-    ok: true,
-    props: EDITABLE_PROPS.map(function (d) {
-      var v = p.getProperty(d.key) || '';
-
-      return {
-        key: d.key,
-        label: d.label,
-        hint: d.hint,
-        set: !!v,
-        tail: (v && !d.noTail) ? v.slice(-4) : ''
-      };
-    })
-  };
-}
-
-function propDef_(key) {
-  for (var i = 0; i < EDITABLE_PROPS.length; i++) {
-    if (EDITABLE_PROPS[i].key === key) return EDITABLE_PROPS[i];
-  }
-
-  throw new Error('不允許修改這個設定');
-}
-
-
-function setProp_(r) {
-  var def = propDef_(String(r.key || ''));
-
-  requireSuper_(r);
-
-  var v = String(r.value || '').trim();
-
-  if (v.length < 8 || v.length > 2000 || /\s/.test(v)) {
-    throw new Error('內容格式不正確（不可有空白或換行，長度至少 8 個字元）');
-  }
-
-  PropertiesService.getScriptProperties().setProperty(def.key, v);
-
-  return getProps_();
-}
-
-function clearProp_(r) {
-  var def = propDef_(String(r.key || ''));
-
-  requireSuper_(r);
-
-  PropertiesService.getScriptProperties().deleteProperty(def.key);
-
-  return getProps_();
-}
-
-
-/* ---------- 第一次部署：補欄位、建立分頁、寫入價目表 ---------- */
-
-/**
- * 在 Apps Script 編輯器手動執行一次（可重複執行，不會覆蓋已存在的資料）：
- * 1. 預約紀錄補「系統備註」「扣抵」「付款方式」；會員資料補「剩餘堂數」「購買堂數」「已上堂數」
- *    （欄位用標題名稱對應，已經有的標題不會重複新增，順序不拘）
- * 2. 建立「課程方案」「購買紀錄」分頁
- * 3. 服務項目若還沒有體驗課／正式課程，就寫入新版價目
- */
-function setupMoonCoreSheets() {
-  var ss = getSpreadsheet_();
-
-  function need(name) {
-    var sh = ss.getSheetByName(name);
-
-    if (!sh) throw new Error('找不到分頁：' + name);
-
-    return sh;
-  }
-
-  function headers(sh) {
-    var lc = sh.getLastColumn();
-
-    return lc
-      ? sh.getRange(1, 1, 1, lc).getValues()[0].map(function (h) { return String(h).trim(); })
-      : [];
-  }
-
-  function ensureHeader(sh, title) {
-    var h = headers(sh);
-
-    if (h.indexOf(title) >= 0) return;
-
-    sh.getRange(1, h.length + 1).setValue(title);
-  }
-
-  // 預約紀錄：第 13 欄必須是「占用分鐘」（前台程式用固定位置讀取）
-  var bk = need(SHEETS.bookings);
-  var c13 = String(bk.getRange(1, 13).getValue()).trim();
-
-  if (c13 && c13 !== '占用分鐘') {
-    throw new Error('「預約紀錄」第 13 欄標題是「' + c13 + '」，預期是「占用分鐘」，請先確認欄位順序');
-  }
-
-  if (!c13) bk.getRange(1, 13).setValue('占用分鐘');
-
-  ['系統備註', '扣抵', '付款方式'].forEach(function (t) { ensureHeader(bk, t); });
-
-  ['剩餘堂數', '購買堂數', '已上堂數'].forEach(function (t) {
-    ensureHeader(need(SHEETS.members), t);
-  });
-
-  // 課程方案
-  var plans = ss.getSheetByName(SHEETS.plans) || ss.insertSheet(SHEETS.plans);
-
-  if (plans.getLastRow() < 2) {
-    plans.clear();
-    plans.getRange(1, 1, 1, 5).setValues([['方案名稱', '堂數', '每堂價格', '方案總價', '狀態']]);
-    plans.getRange(2, 1, 6, 5).setValues([
-      ['單堂', 1, 2000, 2000, '啟用'],
-      ['4 堂', 4, 1850, 7400, '啟用'],
-      ['8 堂', 8, 1750, 14000, '啟用'],
-      ['12 堂', 12, 1650, 19800, '啟用'],
-      ['24 堂', 24, 1550, 37200, '啟用'],
-      ['30 堂', 30, 1500, 45000, '啟用']
-    ]);
-  }
-
-  // 購買紀錄
-  var logSheet = ss.getSheetByName(SHEETS.purchases) || ss.insertSheet(SHEETS.purchases);
-
-  if (logSheet.getLastRow() < 1) {
-    logSheet.getRange(1, 1, 1, 8).setValues([[
-      '時間', '姓名', '電話', '方案', '堂數', '金額', '備註', '付款方式'
-    ]]);
+  b.disabled = false;
+};
+
+/* 儲存 */
+function updBar() {
+  const bar=$("bar"),b=$("save");
+
+  if (tab==="hours"&&dirty.size) {
+    bar.hidden=false;
+    b.textContent=`儲存營業時間（${dirty.size} 天）`;
+  } else if (tab==="services"&&svcNorm(svc)!==svcNorm(S.services)) {
+    bar.hidden=false;
+    b.textContent="儲存服務項目";
   } else {
-    ensureHeader(logSheet, '付款方式');
+    bar.hidden=true;
   }
-
-  // 服務項目
-  var svc = need(SHEETS.services);
-  var names = svc.getLastRow() > 1
-    ? svc.getRange(2, 1, svc.getLastRow() - 1, 1).getValues()
-    : [];
-
-  var hasNew = names.some(function (r) {
-    return /^(體驗課|正式課程)/.test(String(r[0]).trim());
-  });
-
-  if (!hasNew) {
-    if (svc.getLastRow() > 1) {
-      svc.getRange(2, 1, svc.getLastRow() - 1, Math.max(svc.getLastColumn(), 5)).clearContent();
-    }
-
-    svc.getRange(1, 1, 1, 5).setValues([['服務名稱', '價格', '課程分鐘', '緩衝分鐘', '狀態']]);
-    svc.getRange(2, 1, 4, 5).setValues([
-      ['體驗課｜器械床一對一', 799, 60, 0, '啟用'],
-      ['體驗課｜凱迪拉克一對一', 999, 60, 0, '啟用'],
-      ['體驗課｜一對二（兩人合計）', 1200, 60, 0, '啟用'],
-      ['正式課程｜一對一', 2000, 60, 0, '啟用']
-    ]);
-  }
-
-  SpreadsheetApp.flush();
 }
 
-/* ---------- 權限授權 ---------- */
+$("save").onclick=async()=>{
+  const b=$("save");
+  b.disabled=true;
 
-/**
- * 新增權限後，在 Apps Script 編輯器手動執行一次。
- */
-function authorize_() {
-  getSpreadsheet_();
+  try {
+    if (tab==="hours") {
+      await api("saveHours",{rows:[...dirty.values()]});
+      dirty.clear();
+    } else {
+      if (!svc.length&&!confirm("服務項目會全部清空，確定嗎？")) {
+        b.disabled=false;
+        return;
+      }
 
-  UrlFetchApp.fetch(
-    'https://api.line.me/v2/bot/info',
-    {
-      muteHttpExceptions: true
+      await api("saveServices",{
+        list:svc.map(s=>Object.fromEntries(SK.map(k=>[k,s[k]])))
+      });
     }
-  );
+
+    await load();
+    toast("已儲存");
+  } catch(e) {
+    toast(e.message);
+  }
+
+  b.disabled=false;
+  updBar();
+};
+
+function renderAll() {
+  renderBookings();
+  renderHours();
+  renderServices();
+  renderMembers();
+  updBar();
 }
+</script>
+</body>
+</html>

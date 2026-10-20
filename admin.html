@@ -556,6 +556,57 @@ a {
   outline-offset: 3px;
 }
 
+/* 營業時間清單：時段旁的刪除 × */
+.chip.x {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 7px 6px 13px;
+  cursor: default;
+}
+
+.chip.x button {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--pill);
+  color: var(--ink);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hl {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.hl:last-child {
+  border: 0;
+  padding-bottom: 0;
+}
+
+.hl .hd {
+  font-family: var(--serif);
+  font-weight: 600;
+}
+
+.hl .chips {
+  margin: 8px 0 0;
+}
+
+.t-已完成 {
+  color: #5E6B8C;
+}
+
+.sysnote {
+  margin-top: 3px;
+  font-size: 12px;
+  color: var(--mute);
+}
+
 /* 剩餘堂數 */
 .credit {
   font-family: var(--serif);
@@ -655,12 +706,14 @@ a {
 
   <h1 id="title"></h1>
   <p class="sub" id="subt"></p>
+  <div class="mute" id="synced" style="margin:-14px 0 14px;font-size:12px"></div>
 
   <div class="pills" id="tabs">
     <button class="pill on" data-t="bookings">預約系統</button>
     <button class="pill" data-t="hours">營業時間</button>
     <button class="pill" data-t="services">服務項目</button>
     <button class="pill" data-t="members">會員資料</button>
+    <button class="pill" data-t="settings">系統設定</button>
   </div>
 
   <section id="p-bookings">
@@ -674,6 +727,7 @@ a {
         <option value="all">全部狀態</option>
         <option>待確認</option>
         <option>已預約</option>
+        <option>已完成</option>
         <option>已取消</option>
       </select>
     </div>
@@ -725,6 +779,11 @@ a {
         <button class="b g" id="hOff">設為休息</button>
       </div>
     </div>
+    <div class="card">
+      <b>本月所有時段</b>
+      <p class="mute" style="margin:4px 0 8px">按時段旁的 × 可以刪除單一時段，刪除後記得按下方「儲存營業時間」。</p>
+      <div id="hlist"></div>
+    </div>
   </section>
 
   <section id="p-services" hidden>
@@ -751,6 +810,16 @@ a {
     <div id="mlist"></div>
   </section>
 
+  <section id="p-settings" hidden>
+    <div class="card">
+      <p class="mute" style="margin:0">
+        這裡只能寫入後台這個專案的指令碼屬性。內容只會寫入、不會再顯示完整值；每次儲存或清除都要再輸入一次管理員密碼。
+        前台專案（CHANNEL_ACCESS_TOKEN 等）是另一個 GAS 專案，請在它自己的「專案設定」修改。
+      </p>
+    </div>
+    <div id="plist"></div>
+  </section>
+
   <div class="bar" id="bar" hidden>
     <button class="b" id="save"></button>
   </div>
@@ -760,7 +829,7 @@ a {
 </main>
 
 <script>
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzTWCIOXxicuk7BFEtmSlzHcVKZVp2UjKjCrfhRb-HzDVKznjj-Oy23_ucou7HxcMdw/exec";
+const GAS_URL = "https://script.google.com/macros/s/AKfycbyowZ3EXmAyImLihpeBhn9wf7gqg29unT4zWZtfycsoB58IX_pFz2Fr9GWqOpRm1plBXQ/exec";
 
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({
@@ -808,7 +877,8 @@ const TITLES = {
   bookings:["預約系統","所有預約都在這裡，可切換日、週、月檢視。"],
   hours:["營業時間","點選日期，挑好時段，一次套用到多天。"],
   services:["服務項目","調整體驗課與正式課程的價格、時長；不再提供的課程可以停用或刪除。包堂方案請在試算表「課程方案」分頁調整。"],
-  members:["會員資料","學員的聯絡方式、剩餘堂數，以及你自己的備註。"]
+  members:["會員資料","學員的聯絡方式、購買／已上／剩餘堂數，以及你自己的備註。"],
+  settings:["系統設定","管理員專用：寫入通知用的金鑰（指令碼屬性）。"]
 };
 
 function toast(m) {
@@ -816,7 +886,7 @@ function toast(m) {
   t.textContent = m;
   t.hidden = false;
   clearTimeout(tt);
-  tt = setTimeout(()=>t.hidden=true,2800);
+  tt = setTimeout(()=>t.hidden=true,m.length>22?5500:2800);
 }
 
 /* ---------- API ---------- */
@@ -863,11 +933,78 @@ function showLogin() {
   $("pw").value = "";
 }
 
+const sig = j => JSON.stringify([j.hours,j.services,j.plans,j.bookings,j.members]);
+let lastSig = "", lastIds = null, polling = false;
+
+function stamp() {
+  $("synced").textContent = "即時同步中・最後更新 " +
+    new Date().toLocaleTimeString("zh-TW",{hour12:false,timeZone:"Asia/Taipei"});
+}
+
 async function load() {
   S = await api("getAll");
   svc = S.services.map(s=>({...s}));
+  lastSig = sig(S);
+  lastIds = new Set(S.bookings.map(b=>String(b["預約編號"])));
   renderAll();
+  stamp();
 }
+
+/* 即時同步：每 30 秒（頁面開著時）＋切回頁面時重新讀取；
+   正在編輯的區塊先不重畫，避免打到一半的內容消失 */
+const POLL_MS = 30000;
+const typingIn = id => $(id).contains(document.activeElement);
+
+async function refresh() {
+  if (polling || !session || $("app").hidden || $("save").disabled) return;
+  polling = true;
+
+  try {
+    const j = await api("getAll");
+    const s = sig(j);
+    stamp();
+
+    if (s === lastSig) { polling = false; return; }
+
+    // 有新的預約就提醒
+    if (lastIds) {
+      const fresh = j.bookings.filter(b=>!lastIds.has(String(b["預約編號"]))&&b["狀態"]!=="已取消");
+      if (fresh.length) toast(`有新的預約：${fresh[0]["姓名"]} ${md(fresh[0]["日期"])} ${fresh[0]["時間"]}`);
+    }
+    lastIds = new Set(j.bookings.map(b=>String(b["預約編號"])));
+
+    const prevServices = S.services;
+    S = j;
+
+    // 服務項目：有未儲存的修改就保留你的版本
+    if (svcNorm(svc)===svcNorm(prevServices)) svc = j.services.map(x=>({...x}));
+
+    // 營業時間：未儲存的修改重新套回去
+    dirty.forEach((v,ds)=>{
+      const ex = S.hours.find(h=>h.date===ds);
+      if (ex) ex.slots = v.slots;
+      else S.hours.push({date:ds,slots:v.slots,note:""});
+    });
+
+    let skipped = false;
+    renderBookings();
+    renderHours();
+
+    if (typingIn("slist")) skipped = true; else renderServices();
+    if (typingIn("p-members")) skipped = true; else renderMembers();
+
+    updBar();
+    if (!skipped) lastSig = s;
+  } catch(e) {
+    // 背景同步失敗不打擾，下一輪再試
+  }
+
+  polling = false;
+}
+
+setInterval(()=>{ if (!document.hidden) refresh(); }, POLL_MS);
+document.addEventListener("visibilitychange", ()=>{ if (!document.hidden) refresh(); });
+window.addEventListener("focus", refresh);
 
 /* ---------- 登入 / 修改密碼 ---------- */
 
@@ -978,12 +1115,13 @@ function setTab(t) {
   document.querySelectorAll("#tabs .pill").forEach(x=>{
     x.classList.toggle("on",x.dataset.t===t);
   });
-  ["bookings","hours","services","members"].forEach(k=>{
+  ["bookings","hours","services","members","settings"].forEach(k=>{
     $("p-"+k).hidden = k!==t;
   });
   $("title").textContent = TITLES[t][0];
   $("subt").textContent = TITLES[t][1];
   updBar();
+  if (t==="settings") loadProps();
 }
 
 $("tabs").onclick = e => {
@@ -1006,18 +1144,34 @@ function bkByDate() {
   return m;
 }
 
+const pkey = p => String(p||"").replace(/\D/g,"").replace(/^0+/,"");
+const memberOf = p => S.members.find(m=>pkey(m["電話"])===pkey(p));
+const PAYS = ["刷卡","現金","轉帳"];
+
 function bkCard(b) {
   const st=b["狀態"], id=esc(b["預約編號"]);
+  const pack=(+b["扣抵"]||0)>0;
+  const mem=memberOf(b["電話"]);
+  const left=mem&&((+mem["購買堂數"]||0)>0||(+mem["剩餘堂數"]||0)>0)
+    ? `　會員剩餘 ${parseInt(mem["剩餘堂數"],10)||0} 堂` : "";
+  const pay=pack?"":`<select data-pay="${id}" ${st==="已取消"?"disabled":""}>
+        <option value="">未收款</option>
+        ${PAYS.map(p=>`<option ${b["付款方式"]===p?"selected":""}>${p}</option>`).join("")}
+      </select>`;
+
   return `<div class="bk ${st==="已取消"?"x":""}">
     <div class="row sp">
       <b>${esc(b["時間"])}　${esc(b["服務"])}</b>
       <span class="tag t-${esc(st)}">${esc(st)}</span>
     </div>
     <div>${esc(b["姓名"])}・<a href="tel:${esc(fixPhone(b["電話"]))}">${esc(fixPhone(b["電話"]))}</a></div>
-    <div class="mute">${b["付款方式"]==="課程包扣堂"?"課程包扣 1 堂":"$"+esc(b["價格"])+(b["付款方式"]?"（"+esc(b["付款方式"])+"）":"")}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
+    <div class="mute">${pack?"課程包扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
+    ${b["系統備註"]?`<div class="sysnote">${esc(b["系統備註"])}</div>`:""}
     <div class="row" style="margin-top:10px">
       <button class="b sm" data-act="ok" data-id="${id}" ${st==="已預約"?"disabled":""}>確認</button>
+      <button class="b sm" data-act="done" data-id="${id}" ${st==="已完成"||st==="已取消"?"disabled":""}>完成</button>
       <button class="b sm d" data-act="no" data-id="${id}" ${st==="已取消"?"disabled":""}>取消</button>
+      ${pay}
     </div>
   </div>`;
 }
@@ -1101,22 +1255,46 @@ $("bview").onclick=async e=>{
   const b=e.target.closest("button[data-act]");
   if (!b) return;
 
-  const ok=b.dataset.act==="ok",id=b.dataset.id;
+  const act=b.dataset.act, id=b.dataset.id;
+  const status={ok:"已預約",done:"已完成",no:"已取消"}[act];
+  const label={ok:"已確認",done:"已完成",no:"已取消"}[act];
   const bk=S.bookings.find(x=>String(x["預約編號"])===id);
+  const pack=(+bk["扣抵"]||0)>0;
 
-  if (!ok && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？`)) return;
+  if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆是課程包扣堂，會退回 1 堂。":""}`)) return;
+  if (act==="done" && !confirm(`標記 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 已上完課？\n會 LINE 通知學員${pack?"本堂完成與剩餘堂數":"本堂完成"}。`)) return;
 
   b.disabled=true;
   try {
-    const status=ok?"已預約":"已取消";
     const r=await api("setStatus",{id,status});
     bk["狀態"]=status;
-    if (r.creditNote) await load();
+    if (r.creditNote||act==="done") await load();
     else renderBookings();
-    toast((ok?"已確認":"已取消")+(r.creditNote?"・"+r.creditNote:""));
+
+    let msg=label;
+    if (r.stats) msg+=`・剩餘 ${r.stats.credits} 堂`;
+    else if (r.creditNote) msg+="・"+r.creditNote;
+    if (r.notified===false) msg+=`（LINE 通知未送出：${r.notifyError}）`;
+    toast(msg);
   } catch(err) {
     toast(err.message);
     b.disabled=false;
+  }
+};
+
+$("bview").onchange=async e=>{
+  const s=e.target.closest("select[data-pay]");
+  if (!s) return;
+
+  const bk=S.bookings.find(x=>String(x["預約編號"])===s.dataset.pay);
+
+  try {
+    await api("setPayment",{id:s.dataset.pay,method:s.value});
+    bk["付款方式"]=s.value;
+    toast(s.value?`已記錄收款：${s.value}`:"已改為未收款");
+  } catch(err) {
+    toast(err.message);
+    s.value=bk["付款方式"]||"";
   }
 };
 
@@ -1132,7 +1310,50 @@ function commonTimes() {
   return [...new Set([...top,...H.extra,...H.pick])].sort();
 }
 
+function renderHourList() {
+  const t=today(), rows=[];
+
+  for (let d=1;d<=mDays(H.ms);d++) {
+    const ds=dayOf(H.ms,d);
+    if (ds<t) continue;
+
+    const h=S.hours.find(x=>x.date===ds);
+    if (!h) continue;
+
+    const slots=h.slots?h.slots.split(","):[];
+
+    rows.push(`<div class="hl">
+      <div class="hd">${md(ds)}${dirty.has(ds)?' <span class="mute">（未儲存）</span>':""}</div>
+      <div class="chips">${slots.length
+        ? slots.map(s=>`<span class="chip x">${esc(s)}<button type="button" data-ds="${ds}" data-ts="${esc(s)}" aria-label="刪除 ${md(ds)} ${esc(s)}">×</button></span>`).join("")
+        : '<span class="mute">休息</span>'}</div>
+    </div>`);
+  }
+
+  $("hlist").innerHTML=rows.join("")||'<p class="mute none">這個月還沒有設定營業時間。</p>';
+}
+
+$("hlist").onclick=e=>{
+  const b=e.target.closest("button[data-ds]");
+  if (!b) return;
+
+  const ds=b.dataset.ds, ts=b.dataset.ts;
+  const booked=S.bookings.filter(x=>x["日期"]===ds&&x["時間"]===ts&&x["狀態"]!=="已取消");
+
+  if (booked.length && !confirm(`${md(ds)} ${ts} 已有 ${booked.length} 筆預約（${booked.map(x=>x["姓名"]).join("、")}）。\n刪除時段不會取消預約，仍要刪除嗎？`)) return;
+
+  const h=S.hours.find(x=>x.date===ds);
+  const left=h.slots.split(",").filter(x=>x!==ts).join(",");
+
+  dirty.set(ds,{date:ds,slots:left,note:null});
+  h.slots=left;
+  renderHours();
+  updBar();
+  toast(`已移除 ${md(ds)} ${ts}，記得按下方儲存`);
+};
+
 function renderHours() {
+  renderHourList();
   const hm={};
   S.hours.forEach(h=>hm[h.date]=h);
   const t=today();
@@ -1318,6 +1539,7 @@ function renderMembers() {
   $("mlist").innerHTML=list.length?list.map(m=>{
     const n=S.bookings.filter(b=>b["電話"]===m["電話"]&&b["狀態"]!=="已取消").length;
     const cr=parseInt(m["剩餘堂數"],10)||0;
+    const bought=parseInt(m["購買堂數"],10)||0, used=parseInt(m["已上堂數"],10)||0;
 
     return `<div class="card">
       <div class="row sp">
@@ -1329,14 +1551,15 @@ function renderMembers() {
        　首次 ${esc(m["首次預約日期"])}
       </div>
       <div class="row sp" style="margin-top:12px">
-        <div><span class="mute">剩餘</span><span class="credit">${cr}</span><span class="mute">堂</span></div>
+        <div><span class="mute">剩餘</span><span class="credit">${cr}</span><span class="mute">堂　購買 ${bought}・已上 ${used}</span></div>
         <div class="row">
           <button class="b g sm" data-adj="-1" data-row="${m._row}" ${cr<1?"disabled":""}>−1 堂</button>
           <button class="b g sm" data-adj="1" data-row="${m._row}">+1 堂</button>
         </div>
       </div>
       ${plans.length?`<div class="row" style="margin-top:10px">
-        <select>${opts}</select>
+        <select data-k="plan">${opts}</select>
+        <select data-k="method"><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select>
         <button class="b sm" data-buy="1" data-row="${m._row}">新增方案</button>
       </div>`:""}
       <textarea rows="2" data-r="${m._row}" placeholder="寫下備註，例如偏好、提醒事項…">${esc(m["備註"])}</textarea>
@@ -1374,12 +1597,19 @@ $("mlist").onclick=async e=>{
 
   try {
     if (b.dataset.buy) {
-      const plan=b.parentElement.querySelector("select").value;
-      if (!confirm(`為 ${m["姓名"]} 新增「${plan}」？\n堂數會立刻加進剩餘堂數。`)) {
+      const box=b.parentElement;
+      const plan=box.querySelector('select[data-k="plan"]').value;
+      const method=box.querySelector('select[data-k="method"]').value;
+      if (!method) {
+        toast("請先選擇付款方式（刷卡／現金／轉帳）");
         b.disabled=false;
         return;
       }
-      await api("addPackage",{...who,plan});
+      if (!confirm(`為 ${m["姓名"]} 新增「${plan}」（${method}）？\n購買堂數與剩餘堂數會立刻增加。`)) {
+        b.disabled=false;
+        return;
+      }
+      await api("addPackage",{...who,plan,method});
       toast("已新增方案");
     } else {
       const delta=+b.dataset.adj;
@@ -1415,6 +1645,57 @@ $("mAdd").onclick=async()=>{
   }
 
   b.disabled=false;
+};
+
+/* 系統設定：管理員寫入指令碼屬性 */
+async function loadProps() {
+  try {
+    const j=await api("getProps");
+    renderProps(j.props);
+  } catch(e) {
+    toast(e.message);
+  }
+}
+
+function renderProps(list) {
+  $("plist").innerHTML=list.map(p=>`<div class="card" data-k="${esc(p.key)}">
+    <div class="row sp">
+      <b>${esc(p.label)}</b>
+      <span class="tag ${p.set?"t-已預約":"t-待確認"}">${p.set?"已設定 ••••"+esc(p.tail):"未設定"}</span>
+    </div>
+    <p class="mute" style="margin:6px 0 12px">${esc(p.hint)}</p>
+    <input type="password" data-f="val" style="width:100%;margin-bottom:10px" placeholder="貼上新的值（只會寫入，不會再顯示）" autocomplete="off">
+    <input type="password" data-f="pw" style="width:100%;margin-bottom:12px" placeholder="再輸入一次管理員密碼確認" autocomplete="current-password">
+    <div class="row">
+      <button class="b sm" data-set="1">儲存</button>
+      ${p.set?'<button class="b g sm d" data-clr="1">清除</button>':""}
+    </div>
+  </div>`).join("");
+}
+
+$("plist").onclick=async e=>{
+  const b=e.target.closest("button[data-set],button[data-clr]");
+  if (!b) return;
+
+  const card=b.closest("[data-k]");
+  const key=card.dataset.k;
+  const value=card.querySelector('[data-f="val"]').value.trim();
+  const confirmPw=card.querySelector('[data-f="pw"]').value;
+  const clearing=!!b.dataset.clr;
+
+  if (!confirmPw) return toast("請輸入管理員密碼");
+  if (!clearing && !value) return toast("請貼上要寫入的內容");
+  if (clearing && !confirm("確定清除這個設定？清除後相關通知會停止。")) return;
+
+  b.disabled=true;
+  try {
+    const j=await api(clearing?"clearProp":"setProp",{key,value,confirmPw});
+    renderProps(j.props);
+    toast(clearing?"已清除":"已寫入");
+  } catch(err) {
+    toast(err.message);
+    b.disabled=false;
+  }
 };
 
 /* 儲存 */

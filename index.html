@@ -683,6 +683,37 @@
 
     }
 
+  
+    .coach-button {
+      width: 100%;
+      min-height: 48px;
+      border: 1px solid #6F4E37;
+      background: #FFFFFF;
+      color: #4B342A;
+      border-radius: 10px;
+      padding: 11px 5px;
+      font-family: inherit;
+      font-size: 15px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .coach-button.selected {
+      background: #6F4E37;
+      border-color: #6F4E37;
+      color: #FFFFFF;
+      box-shadow: 0 4px 10px rgba(111, 78, 55, 0.25);
+    }
+
+    .coach-button.disabled,
+    .coach-button:disabled {
+      background: #F1ECE4;
+      border-color: #E0D6C9;
+      color: #B8A99A;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
   </style>
 
 </head>
@@ -732,6 +763,7 @@
       </select>
 
       <div id="serviceNote" class="service-note"></div>
+      <div id="pkgInfo" class="service-note" hidden></div>
 
     </div>
 
@@ -765,6 +797,16 @@
 
     </div>
 
+    <div class="form-group" id="coachGroup" style="display:none;">
+
+      <label id="coachLabel">
+        選擇教練
+      </label>
+
+      <div id="coachChoices" class="times"></div>
+
+    </div>
+
     <div class="form-group">
 
       <label for="name">
@@ -789,6 +831,10 @@
         inputmode="tel"
       >
 
+      <div id="idHint" class="service-note" hidden>
+        已帶入您的會員資料；如需修改姓名或電話，請與工作室聯繫。
+      </div>
+
     </div>
 
     <!-- 只有「一對二」體驗才會顯示 -->
@@ -798,7 +844,23 @@
         同行夥伴姓名
       </label>
 
-      <input type="text" id="partnerName" placeholder="請輸入一起體驗的夥伴姓名" maxlength="30">
+      <input type="text" id="partnerName" placeholder="請輸入同行夥伴的姓名" maxlength="30">
+
+      <div id="partnerPhoneWrap" style="display:none; margin-top:10px;">
+
+        <label for="partnerPhone">
+          同行夥伴電話
+        </label>
+
+        <input
+          type="tel"
+          id="partnerPhone"
+          placeholder="請輸入夥伴的電話（要與他的會員資料一致）"
+          inputmode="tel"
+          maxlength="20"
+        >
+
+      </div>
 
     </div>
 
@@ -832,11 +894,21 @@
   const TWO_PERSON_KEYWORD = '一對二';
 
   const NOTE_TRIAL =
-    '體驗課僅限首次預約（新生限定），每人限體驗一次，每堂 60 分鐘。後續預約請選擇正式課程。';
+    '體驗課僅限首次預約（新生限定），每人限體驗一次，每堂 60 分鐘，教練由工作室為您安排。後續預約請選擇正式課程。';
 
   const NOTE_FORMAL =
     '正式課程不區分器械種類，由老師依個人需求安排核心床、凱迪拉克及其他器械，使用凱迪拉克不另加價。' +
-    '已購買課程包的學員，預約時會自動扣抵 1 堂。本工作室沒有儲值金，僅提供包堂方案。';
+    '本工作室沒有儲值金，僅提供包堂方案。';
+
+  const NOTE_PACKAGE =
+    '您有課程包：預約時會自動扣 1 堂，只會顯示專屬教練有空的時段；同一時段有兩位教練都有空時，可以自己選擇。';
+
+  const NOTE_JOINT =
+    '一對二課程需要兩位同行夥伴「共同預約」：兩位都要有一對二課程包，預約時各保留 1 堂，教練由工作室安排。' +
+    '如果其中一位臨時請假，請與工作室聯繫：可以兩人一起改期，或改成一對一並補差額。';
+
+  const NOTE_SINGLE =
+    '目前沒有可用的課程包，將以單堂價格預約，教練由工作室為您安排。想購買課程包請與工作室聯繫。';
 
   let selectedTime = '';
   let selectedDate = '';
@@ -855,6 +927,16 @@
   let liffReady = false;
   let serviceDisabled = false;
 
+  // 以 LINE 帳號判斷的身分狀態（由後端 getMyStatus 回傳）
+  let ME = { bound: false, hasPackage: false, hasTwo: false, credits: 0, coaches: [], trialEligible: true };
+  let meReady = false;
+  let servicesLoaded = false;
+  let lastIdKey = '';
+
+  // 這個時段有空的專屬教練（課程包會員才會有），以及客人選的教練
+  let slotCoaches = [];
+  let selectedCoach = '';
+
   const $ = function (id) { return document.getElementById(id); };
 
   /* ==================================================
@@ -866,6 +948,14 @@
     initLIFF();
     checkServiceStatus();
     loadServices();
+
+    // LINE 查詢太久沒回應時，不要一直卡在讀取畫面
+    setTimeout(function () {
+      if (!meReady) {
+        meReady = true;
+        maybeRenderCalendar();
+      }
+    }, 8000);
 
   });
 
@@ -898,6 +988,11 @@
 
   function isTrial(name) {
     return String(name).indexOf(TRIAL_PREFIX) === 0;
+  }
+
+  // 正式的一對二（課程包）：兩位學生共同預約
+  function isJointService(name) {
+    return !isTrial(name) && String(name).indexOf(TWO_PERSON_KEYWORD) !== -1;
   }
 
   function shortName(name) {
@@ -977,15 +1072,42 @@
 
     }
 
+    servicesLoaded = true;
+
     onServiceChange(false);
     applyTrialState();
-    renderCalendar();
+    updateServiceLabels();
+    maybeRenderCalendar();
+
+  }
+
+  /* ==================================================
+     身分狀態：以 LINE 帳號判斷是不是新生、有沒有課程包、專屬教練是誰
+  ================================================== */
+
+  function identity() {
+    return {
+      idToken: lineIdToken,
+      phone: $('phone').value.trim(),
+      name: $('name').value.trim()
+    };
+  }
+
+  function maybeRenderCalendar() {
+    if (servicesLoaded && meReady) renderCalendar();
+  }
+
+  function noteFor(name) {
+
+    if (!name) return '';
+    if (isTrial(name)) return NOTE_TRIAL;
+    if (isJointService(name)) return NOTE_FORMAL + NOTE_JOINT;
+
+    return NOTE_FORMAL + (ME.hasPackage ? NOTE_PACKAGE : NOTE_SINGLE);
 
   }
 
   /* 體驗課只有首次預約：不是首次的人，體驗課選項直接停用 */
-  let trialAllowed = true;
-
   function applyTrialState() {
 
     const select = $('service');
@@ -993,15 +1115,17 @@
 
     if (!group) return;
 
-    group.label = trialAllowed
+    const allowed = ME.trialEligible !== false;
+
+    group.label = allowed
       ? '首次體驗課（新生限定）'
       : '首次體驗課（僅限首次預約，您已不適用）';
 
     Array.prototype.forEach.call(group.children, function (option) {
-      option.disabled = !trialAllowed;
+      option.disabled = !allowed;
     });
 
-    if (!trialAllowed && isTrial(select.value)) {
+    if (!allowed && isTrial(select.value)) {
 
       const next = Array.prototype.find.call(select.options, function (o) {
         return o.value && !o.disabled;
@@ -1015,50 +1139,196 @@
 
   }
 
-  async function refreshTrialEligibility() {
+  // 有課程包 → 顯示「課程包扣 1 堂」；沒有 → 顯示單堂價格
+  function updateServiceLabels() {
 
-    if (!lineIdToken) return;
+    const options = $('service').querySelectorAll('optgroup:not([data-trial]) option');
 
-    try {
+    Array.prototype.forEach.call(options, function (o) {
 
-      const result = await callGAS('checkTrialEligible', {
-        idToken: lineIdToken,
-        phone: $('phone').value.trim()
-      });
+      const base = shortName(o.value);
 
-      if (result && result.success) {
-        trialAllowed = result.eligible !== false;
-        applyTrialState();
+      if (isJointService(o.value)) {
+
+        // 一對二：必須使用一對二課程包（兩位都要有），不提供單堂線上預約
+        o.textContent = ME.hasTwo
+          ? base + '｜課程包各扣 1 堂（需兩位都有一對二課程包）'
+          : base + '｜需要一對二課程包';
+        o.disabled = !ME.hasTwo;
+
+        return;
+
       }
 
-    } catch (error) {
+      o.textContent = ME.hasPackage
+        ? base + '｜課程包扣 1 堂（剩 ' + ME.credits + ' 堂）'
+        : base + '｜單堂 ' + formatMoney(o.dataset.price);
 
-      // 查詢失敗不影響預約，送出時後端仍會檢查
-      console.error('refreshTrialEligibility ERROR:', error);
+    });
+
+    // 目前選到的選項被停用了，就改選第一個可用的
+    const select = $('service');
+    const cur = Array.prototype.find.call(select.options, function (o) { return o.value === select.value; });
+
+    if (cur && cur.disabled) {
+
+      const next = Array.prototype.find.call(select.options, function (o) { return o.value && !o.disabled; });
+
+      if (next) {
+        select.value = next.value;
+        onServiceChange(true);
+      }
 
     }
 
   }
 
-  $('phone').addEventListener('blur', refreshTrialEligibility);
+  function updatePackageInfo() {
+
+    const box = $('pkgInfo');
+
+    if (!ME.hasPackage) {
+      box.hidden = true;
+      box.textContent = '';
+      return;
+    }
+
+    box.hidden = false;
+    box.textContent = ME.coaches.length
+      ? '您有課程包，剩餘 ' + ME.credits + ' 堂。專屬教練：' +
+        ME.coaches.map(function (c) { return c.name; }).join('、') + '。'
+      : '您有課程包（剩餘 ' + ME.credits + ' 堂），但還沒有指定專屬教練，暫時無法線上預約，請與工作室聯繫。';
+
+  }
+
+  function lockIdentity(name, phone) {
+
+    if (name) {
+      $('name').value = name;
+      $('name').readOnly = true;
+    }
+
+    if (phone) {
+      $('phone').value = phone;
+      $('phone').readOnly = true;
+    }
+
+    $('idHint').hidden = !(name || phone);
+
+  }
+
+  function hideCoachChoices() {
+
+    slotCoaches = [];
+    selectedCoach = '';
+
+    $('coachGroup').style.display = 'none';
+    $('coachChoices').innerHTML = '';
+
+  }
+
+  async function refreshMyStatus() {
+
+    if (!lineIdToken) {
+
+      if (!meReady) {
+        meReady = true;
+        maybeRenderCalendar();
+      }
+
+      return;
+
+    }
+
+    const id = identity();
+    const key = id.phone + '|' + id.name;
+
+    if (meReady && key === lastIdKey) return;
+
+    lastIdKey = key;
+
+    try {
+
+      const r = await callGAS('getMyStatus', id);
+
+      if (r && r.success) {
+
+        const before = JSON.stringify([
+          ME.hasPackage, ME.hasTwo, ME.credits, ME.coaches.map(function (c) { return c.account; }), ME.trialEligible
+        ]);
+
+        ME = {
+          bound: !!r.bound,
+          hasPackage: !!r.hasPackage,
+          hasTwo: !!r.hasTwo,
+          credits: r.credits || 0,
+          coaches: r.coaches || [],
+          trialEligible: r.trialEligible !== false
+        };
+
+        if (r.bound) lockIdentity(r.name, r.phone);
+
+        applyTrialState();
+        updateServiceLabels();
+        updatePackageInfo();
+        $('serviceNote').textContent = noteFor($('service').value);
+
+        const after = JSON.stringify([
+          ME.hasPackage, ME.hasTwo, ME.credits, ME.coaches.map(function (c) { return c.account; }), ME.trialEligible
+        ]);
+
+        // 身分狀態變了（例如輸入電話後認出課程包），可預約日期與時段要重新查
+        if (meReady && before !== after) {
+
+          selectedTime = '';
+          hideCoachChoices();
+          monthAvailabilityKey = '';
+
+          renderCalendar();
+
+          if (selectedDate) loadTimes();
+
+        }
+
+      }
+
+    } catch (error) {
+
+      // 查詢失敗不影響預約，送出時後端仍會檢查
+      console.error('refreshMyStatus ERROR:', error);
+
+    }
+
+    if (!meReady) {
+      meReady = true;
+      maybeRenderCalendar();
+    }
+
+  }
+
+  $('phone').addEventListener('blur', refreshMyStatus);
+  $('name').addEventListener('blur', refreshMyStatus);
 
   function onServiceChange(reload) {
 
     const name = $('service').value;
 
-    $('serviceNote').textContent =
-      !name ? '' : (isTrial(name) ? NOTE_TRIAL : NOTE_FORMAL);
+    $('serviceNote').textContent = noteFor(name);
 
     $('partnerGroup').style.display =
       name.indexOf(TWO_PERSON_KEYWORD) !== -1 ? 'block' : 'none';
+
+    // 正式的一對二才需要夥伴電話（體驗課只填姓名）
+    $('partnerPhoneWrap').style.display = isJointService(name) ? 'block' : 'none';
 
     if (reload) {
 
       // 不同課程的時長可能不同，可預約日期與時段要重新查
       selectedTime = '';
+      hideCoachChoices();
       monthAvailabilityKey = '';
 
-      renderCalendar();
+      maybeRenderCalendar();
 
       if (selectedDate) loadTimes();
 
@@ -1092,7 +1362,7 @@
 
       const result = await callGAS(
         'getAvailableDatesInMonth',
-        { yearMonth: key, service: $('service').value }
+        Object.assign({ yearMonth: key, service: $('service').value }, identity())
       );
 
       if (result && result.success) {
@@ -1296,7 +1566,7 @@
       }
 
       liffReady = true;
-      refreshTrialEligibility();
+      refreshMyStatus();
 
       status.innerText = '✓ LINE 已連線';
       status.classList.add('success-status');
@@ -1307,6 +1577,11 @@
 
       status.innerText = 'LINE 初始化失敗';
       status.classList.add('error-status');
+
+      if (!meReady) {
+        meReady = true;
+        maybeRenderCalendar();
+      }
 
       $('message').innerHTML =
         '<div class="success">' +
@@ -1356,9 +1631,67 @@
      取得可預約時間
   ================================================== */
 
+  // 選了時段後：課程包會員依有空的教練數量，自動帶入或讓客人選
+  function onTimePicked(entry) {
+
+    selectedCoach = '';
+    slotCoaches = (entry && entry.coaches) || [];
+
+    const box = $('coachChoices');
+
+    if (!slotCoaches.length) {
+      hideCoachChoices();
+      return;
+    }
+
+    $('coachGroup').style.display = 'block';
+
+    if (slotCoaches.length === 1) {
+
+      selectedCoach = slotCoaches[0].account;
+      $('coachLabel').textContent = '上課教練';
+      box.innerHTML =
+        '<div class="no-time" style="grid-column:1/-1">' +
+          escapeHtml(slotCoaches[0].name) + '（專屬教練）' +
+        '</div>';
+
+      return;
+
+    }
+
+    $('coachLabel').textContent = '選擇教練（這個時段有多位教練有空）';
+    box.innerHTML = '';
+
+    slotCoaches.forEach(function (c) {
+
+      const b = document.createElement('button');
+
+      b.type = 'button';
+      b.className = 'coach-button';
+      b.innerText = c.name;
+
+      b.addEventListener('click', function () {
+
+        selectedCoach = c.account;
+
+        box.querySelectorAll('.coach-button').forEach(function (x) {
+          x.classList.remove('selected');
+        });
+
+        b.classList.add('selected');
+
+      });
+
+      box.appendChild(b);
+
+    });
+
+  }
+
   async function loadTimes() {
 
     selectedTime = '';
+    hideCoachChoices();
 
     const date = selectedDate;
     const container = $('times');
@@ -1382,7 +1715,7 @@
 
       const result = await callGAS(
         'getAvailableTimes',
-        { date: date, service: $('service').value }
+        Object.assign({ date: date, service: $('service').value }, identity())
       );
 
       // 讀取期間使用者又改選了別天，這次的結果就不用了
@@ -1395,6 +1728,12 @@
       const times = result.times || [];
 
       container.innerHTML = '';
+
+      if (result.noCoach) {
+        container.innerHTML =
+          '<div class="no-time">您的課程包還沒有指定專屬教練，請與工作室聯繫。</div>';
+        return;
+      }
 
       if (times.length === 0) {
         container.innerHTML = '<div class="no-time">這天沒有可預約時段</div>';
@@ -1431,6 +1770,8 @@
             });
 
             button.classList.add('selected');
+
+            onTimePicked(entry);
 
           });
 
@@ -1507,6 +1848,7 @@
     const name = $('name').value.trim();
     const phone = $('phone').value.trim();
     const partnerName = $('partnerName').value.trim();
+    const partnerPhone = $('partnerPhone').value.trim();
 
     if (!liffReady || !lineUserId) {
       alert('LINE 尚未連線，請從 LINE 官方帳號開啟預約。');
@@ -1520,7 +1862,17 @@
     if (!phone) { alert('請輸入電話'); return; }
 
     if (service.indexOf(TWO_PERSON_KEYWORD) !== -1 && !partnerName) {
-      alert('一對二體驗請填寫同行夥伴的姓名');
+      alert(isJointService(service) ? '一對二課程請填寫同行夥伴的姓名與電話' : '一對二體驗請填寫同行夥伴的姓名');
+      return;
+    }
+
+    if (isJointService(service) && !partnerPhone) {
+      alert('一對二課程請填寫同行夥伴的電話（要與他的會員資料一致）');
+      return;
+    }
+
+    if (slotCoaches.length > 1 && !selectedCoach) {
+      alert('這個時段有多位教練有空，請先選擇要上課的教練');
       return;
     }
 
@@ -1540,6 +1892,8 @@
         name: name,
         phone: phone,
         partnerName: service.indexOf(TWO_PERSON_KEYWORD) !== -1 ? partnerName : '',
+        partnerPhone: isJointService(service) ? partnerPhone : '',
+        coachAccount: selectedCoach,
 
         // 後端使用 idToken 向 LINE 官方驗證身分
         idToken: lineIdToken
@@ -1630,6 +1984,7 @@
           successRow('日期', result.date || '') +
           successRow('時間', formatTime(result.time)) +
           successRow('課程', shortName(result.service || '')) +
+          (result.coachName ? successRow('教練', result.coachName) : '') +
           (result.partnerName ? successRow('同行夥伴', result.partnerName) : '') +
           successRow('費用', fee) +
         '</div>' +
@@ -1638,6 +1993,7 @@
           (sentToLine
             ? '預約確認通知已傳送至您的 LINE。'
             : '預約已完成，期待與您見面。') +
+          (result.coachName ? '' : '教練會由工作室為您安排，確認後會再與您聯繫。') +
         '</div>' +
 
       '</div>';
@@ -1691,9 +2047,17 @@
 
     $('times').innerHTML = '<div class="no-time">請先選擇日期</div>';
 
-    $('name').value = '';
-    $('phone').value = '';
+    // 已帶入會員資料的欄位不清掉
+    if (!$('name').readOnly) $('name').value = '';
+    if (!$('phone').readOnly) $('phone').value = '';
     $('partnerName').value = '';
+    $('partnerPhone').value = '';
+
+    hideCoachChoices();
+
+    // 預約後課程包堂數、新生身分都可能變了，重新查一次
+    lastIdKey = '';
+    refreshMyStatus();
 
   }
 

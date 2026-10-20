@@ -832,7 +832,7 @@
   const TWO_PERSON_KEYWORD = '一對二';
 
   const NOTE_TRIAL =
-    '首次體驗課僅限新生，每人限體驗一次，每堂 60 分鐘。';
+    '體驗課僅限首次預約（新生限定），每人限體驗一次，每堂 60 分鐘。後續預約請選擇正式課程。';
 
   const NOTE_FORMAL =
     '正式課程不區分器械種類，由老師依個人需求安排核心床、凱迪拉克及其他器械，使用凱迪拉克不另加價。' +
@@ -915,6 +915,8 @@
     const group = document.createElement('optgroup');
     group.label = label;
 
+    if (label.indexOf('首次') === 0) group.dataset.trial = '1';
+
     names.forEach(function (name) {
 
       const option = document.createElement('option');
@@ -976,9 +978,69 @@
     }
 
     onServiceChange(false);
+    applyTrialState();
     renderCalendar();
 
   }
+
+  /* 體驗課只有首次預約：不是首次的人，體驗課選項直接停用 */
+  let trialAllowed = true;
+
+  function applyTrialState() {
+
+    const select = $('service');
+    const group = select.querySelector('optgroup[data-trial]');
+
+    if (!group) return;
+
+    group.label = trialAllowed
+      ? '首次體驗課（新生限定）'
+      : '首次體驗課（僅限首次預約，您已不適用）';
+
+    Array.prototype.forEach.call(group.children, function (option) {
+      option.disabled = !trialAllowed;
+    });
+
+    if (!trialAllowed && isTrial(select.value)) {
+
+      const next = Array.prototype.find.call(select.options, function (o) {
+        return o.value && !o.disabled;
+      });
+
+      if (next) select.value = next.value;
+
+      onServiceChange(true);
+
+    }
+
+  }
+
+  async function refreshTrialEligibility() {
+
+    if (!lineIdToken) return;
+
+    try {
+
+      const result = await callGAS('checkTrialEligible', {
+        idToken: lineIdToken,
+        phone: $('phone').value.trim()
+      });
+
+      if (result && result.success) {
+        trialAllowed = result.eligible !== false;
+        applyTrialState();
+      }
+
+    } catch (error) {
+
+      // 查詢失敗不影響預約，送出時後端仍會檢查
+      console.error('refreshTrialEligibility ERROR:', error);
+
+    }
+
+  }
+
+  $('phone').addEventListener('blur', refreshTrialEligibility);
 
   function onServiceChange(reload) {
 
@@ -1234,6 +1296,7 @@
       }
 
       liffReady = true;
+      refreshTrialEligibility();
 
       status.innerText = '✓ LINE 已連線';
       status.classList.add('success-status');

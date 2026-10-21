@@ -750,7 +750,6 @@ a {
     <button class="pill on" data-t="bookings">預約系統</button>
     <button class="pill" data-t="hours">營業時間</button>
     <button class="pill" data-t="rentals">場租</button>
-    <button class="pill" data-t="coaches">自由教練</button>
     <button class="pill" data-t="services">服務項目</button>
     <button class="pill" data-t="members">會員資料</button>
     <button class="pill" data-t="staff">員工</button>
@@ -861,20 +860,6 @@ a {
       <p class="mute" style="margin:4px 0 12px">登記後，那間教室（或那張床）在這段時間不會再被客戶預約。課程一律整間保留，所以只要有單床場租，那間教室就不能再整間預約。</p>
 
       <div class="row">
-        <select id="rtCoach"></select>
-      </div>
-
-      <div class="row" id="rtCoachRow" style="margin-top:10px" hidden>
-        <select id="rtType">
-          <option value="一對一">一對一（1 個席位）</option>
-          <option value="一對二">一對二（2 個席位）</option>
-        </select>
-        <select id="rtEquip"></select>
-      </div>
-
-      <div id="rtHint" class="mute" style="margin:8px 0 0" hidden></div>
-
-      <div class="row" style="margin-top:10px" id="rtKindRow">
         <select id="rtKind">
           <option value="場租">場租</option>
           <option value="不開放">維修／不開放</option>
@@ -903,12 +888,13 @@ a {
       </div>
 
       <div class="row" style="margin-top:10px">
-        <select id="rtPay">
+        <select id="rtPay" data-m5>
           <option value="">未收款</option>
           <option>刷卡</option>
           <option>現金</option>
           <option>轉帳</option>
         </select>
+        <input id="rtLast5" data-l5 placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px" hidden>
         <input id="rtNote" class="w" placeholder="備註（選填）" maxlength="200" autocomplete="off">
       </div>
 
@@ -922,25 +908,6 @@ a {
       </label>
     </div>
     <div class="card" id="rtList"></div>
-  </section>
-
-  <section id="p-coaches" hidden>
-    <div class="card">
-      <b>新增自由教練</b>
-      <p class="mute" style="margin:4px 0 12px">自由教練是外部老師，向工作室租借教學席位（每次 60 分鐘）。首次合作要先完成資格確認與器材使用說明，才能預約。</p>
-      <div class="row">
-        <input id="ncName" class="w" placeholder="姓名" maxlength="30" autocomplete="off">
-        <input id="ncPhone" class="w" type="tel" inputmode="tel" placeholder="電話" autocomplete="off">
-      </div>
-      <div class="row" style="margin-top:10px">
-        <input id="ncEquip" class="w" placeholder="核定器械（用逗號分隔）" value="核心床,凱迪拉克" autocomplete="off">
-        <label class="mute" style="display:flex;align-items:center;gap:6px;font-size:13px">
-          <input type="checkbox" id="ncQual"> 已完成資格確認
-        </label>
-      </div>
-      <button class="b" id="ncAdd" style="margin-top:14px">新增自由教練</button>
-    </div>
-    <div id="colist"></div>
   </section>
 
   <section id="p-staff" hidden>
@@ -1086,8 +1053,7 @@ const TITLES = {
   services:["服務項目","調整體驗課與正式課程的價格、時長；不再提供的課程可以停用或刪除。包堂方案請在試算表「課程方案」分頁調整。"],
   members:["會員資料","學員的聯絡方式、購買／已上／剩餘堂數，以及你自己的備註。"],
   settings:["系統設定","管理員專用：寫入通知用的金鑰（指令碼屬性）。"],
-  rentals:["場租","自由教練預約席位（每次 60 分鐘），或登記維修／不開放時段；登記後那個席位不會再被客戶預約。"],
-  coaches:["自由教練","老師的資格確認與核定器械、場租次數方案，以及剩餘次數。"],
+  rentals:["場租","登記教室出租、維修或不開放時段；登記後那間教室（或那張床）不會再被客戶預約。"],
   staff:["員工","新增員工帳號、改姓名、停用或重設密碼。員工第一次用初始密碼登入後要自己改密碼。"],
   myfree:["我的空檔","點選日期，標示你那天哪些時段有空；管理員會依這裡分配課程。"],
   myjobs:["我的課表","管理員指派給你的課程。"]
@@ -1160,8 +1126,8 @@ let lastSig = "", lastIds = null, polling = false;
 
 /* 身分：管理員 / 員工 / 萬用密碼（開發者）。每種身分只看得到自己的分頁 */
 const ROLE_TABS = {
-  boss:["bookings","hours","rentals","coaches","services","members","staff"],
-  master:["bookings","hours","rentals","coaches","services","members","staff","settings"],
+  boss:["bookings","hours","rentals","services","members","staff"],
+  master:["bookings","hours","rentals","services","members","staff","settings"],
   staff:["myfree","myjobs"]
 };
 
@@ -1393,7 +1359,7 @@ function setTab(t) {
   document.querySelectorAll("#tabs .pill").forEach(x=>{
     x.classList.toggle("on",x.dataset.t===t);
   });
-  ["bookings","hours","rentals","coaches","services","members","staff","settings","myfree","myjobs"].forEach(k=>{
+  ["bookings","hours","rentals","services","members","staff","settings","myfree","myjobs"].forEach(k=>{
     $("p-"+k).hidden = k!==t;
   });
   $("title").textContent = TITLES[t][0];
@@ -1402,7 +1368,6 @@ function setTab(t) {
   if (t==="settings") loadProps();
   if (t==="staff") loadStaffList();
   if (t==="rentals") initRentalForm();
-  if (t==="coaches") loadCoaches();
 }
 
 $("tabs").onclick = e => {
@@ -1428,6 +1393,30 @@ function bkByDate() {
 const pkey = p => String(p||"").replace(/\D/g,"").replace(/^0+/,"");
 const memberOf = p => S.members.find(m=>pkey(m["電話"])===pkey(p));
 const PAYS = ["刷卡","現金","轉帳"];
+
+// 「確認／完成時 LINE 通知學生」的預設勾選（記在這台瀏覽器）
+const notifyDefault = () => { try { return localStorage.getItem("notify")!=="0"; } catch(e) { return true; } };
+
+// 付款方式選「轉帳」時才出現的匯款後 5 碼欄位（必須緊接在 select 後面）
+const L5 = (extra="") => `<input data-l5 ${extra} placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px" hidden>`;
+
+// prompt 版本：只有轉帳才問；取消或格式錯誤回傳 null
+function askLast5(method) {
+  if (method!=="轉帳") return "";
+  const v=prompt("匯款帳號後 5 碼（沒有可留空）：","");
+  if (v===null) return null;
+  const s=v.trim();
+  if (s&&!/^\d{5}$/.test(s)) { toast("後 5 碼要是 5 位數字"); return null; }
+  return s;
+}
+
+// 選了「轉帳」才顯示緊接在後面的後 5 碼欄位
+document.addEventListener("change", e => {
+  const s=e.target.closest&&e.target.closest("select[data-m5]");
+  if (!s) return;
+  const i=s.nextElementSibling;
+  if (i&&i.hasAttribute&&i.hasAttribute("data-l5")) i.hidden=s.value!=="轉帳";
+});
 const sameAcct = (a,b) => String(a||"").trim().toLowerCase()===String(b||"").trim().toLowerCase();
 
 // 這位員工有沒有標示這個預約的開始時間有空（只是提示，指派時後端會再完整檢查）
@@ -1511,9 +1500,12 @@ async function convertUI(id) {
       if (+paid>0) method=prompt("付款方式（刷卡／現金／轉帳）：","現金")||"";
     }
 
+    const l5=askLast5(method);
+    if (l5===null) return;
+
     if (!confirm(`確定改成一對一？\n・${q.absent}：解除保留，不扣課\n・${q.attendee}：補差額 $${+due||0}，已收 $${+paid||0}`)) return;
 
-    const r=await api("convertToSingle",{id,due,paid,method});
+    const r=await api("convertToSingle",{id,due,paid,method,last5:l5});
     await load();
     toast(`已改成一對一${r.unpaid>0?`，未收 $${r.unpaid}`:""}`);
   } catch(err) {
@@ -1528,8 +1520,11 @@ async function dueUI(id) {
   const method=prompt("付款方式（刷卡／現金／轉帳）：","現金");
   if (method===null) return;
 
+  const l5=askLast5(method);
+  if (l5===null) return;
+
   try {
-    await api("addPayment",{id,amount,method});
+    await api("addPayment",{id,amount,method,last5:l5});
     await load();
     toast("已登記補差額收款");
   } catch(err) {
@@ -1570,10 +1565,10 @@ function bkCard(b) {
   const mem=memberOf(b["電話"]);
   const left=mem&&((+mem["購買堂數"]||0)>0||(+mem["剩餘堂數"]||0)>0)
     ? `　會員剩餘 ${parseInt(mem["剩餘堂數"],10)||0} 堂` : "";
-  const pay=pack?"":`<select data-pay="${id}" ${st==="已取消"?"disabled":""}>
+  const pay=pack?"":`<select data-pay="${id}" data-m5 ${st==="已取消"?"disabled":""}>
         <option value="">未收款</option>
         ${PAYS.map(p=>`<option ${b["付款方式"]===p?"selected":""}>${p}</option>`).join("")}
-      </select>`;
+      </select><input data-l5 data-lpay="${id}" value="${esc(b["匯款後五碼"]||"")}" placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px" ${b["付款方式"]==="轉帳"?"":"hidden"} ${st==="已取消"?"disabled":""}>`;
 
   return `<div class="bk ${st==="已取消"?"x":""}">
     <div class="row sp">
@@ -1583,7 +1578,10 @@ function bkCard(b) {
     <div>${esc(b["姓名"])}・<a href="tel:${esc(fixPhone(b["電話"]))}">${esc(fixPhone(b["電話"]))}</a></div>
     <div class="mute">${pack?"課程扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
     ${b["系統備註"]?`<div class="sysnote">${esc(b["系統備註"])}</div>`:""}
-    <div class="row" style="margin-top:10px">
+    <label class="mute" style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px">
+      <input type="checkbox" data-notify="${id}" ${notifyDefault()?"checked":""}> 確認／完成時 LINE 通知學生
+    </label>
+    <div class="row" style="margin-top:8px">
       <button class="b sm" data-act="ok" data-id="${id}" ${st==="已預約"?"disabled":""}>確認</button>
       <button class="b sm" data-act="done" data-id="${id}" ${st==="已完成"||st==="已取消"?"disabled":""}>完成</button>
       <button class="b sm d" data-act="no" data-id="${id}" ${st==="已取消"?"disabled":""}>取消</button>
@@ -1761,11 +1759,16 @@ $("bview").onclick=async e=>{
   const pack=(+bk["扣抵"]||0)>0;
 
   if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆是課程扣堂，會退回 1 堂。":""}`)) return;
-  if (act==="done" && !confirm(`標記 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 已上完課？\n會 LINE 通知學員${pack?"本堂完成與剩餘堂數":"本堂完成"}。`)) return;
+  // 這張卡片上「LINE 通知學生」的勾選
+  const holder=b.closest&&b.closest(".bk");
+  const cb=holder&&holder.querySelector&&holder.querySelector("input[data-notify]");
+  const notify=cb?cb.checked:true;
+
+  if (act==="done" && !confirm(`標記 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 已上完課？\n${notify?"會 LINE 通知學員"+(pack?"本堂完成與剩餘堂數":"本堂完成")+"。":"不會 LINE 通知學員。"}`)) return;
 
   b.disabled=true;
   try {
-    const r=await api("setStatus",{id,status});
+    const r=await api("setStatus",{id,status,notify});
     bk["狀態"]=status;
     if (r.creditNote||act==="done") await load();
     else renderBookings();
@@ -1774,6 +1777,7 @@ $("bview").onclick=async e=>{
     if (r.stats) msg+=`・剩餘 ${r.stats.credits} 堂`;
     else if (r.creditNote) msg+="・"+r.creditNote;
     if (r.notified===false) msg+=`（LINE 通知未送出：${r.notifyError}）`;
+    else if (!notify&&(act==="ok"||act==="done")) msg+="（未通知學生）";
     toast(msg);
   } catch(err) {
     toast(err.message);
@@ -1801,15 +1805,42 @@ $("bview").onchange=async e=>{
   const rm=e.target.closest("select[data-room]");
   if (rm) return assignRoomUI(rm.dataset.room,rm.value);
 
+  // 記住「通知學生」的勾選
+  const nb=e.target.closest("input[data-notify]");
+  if (nb) {
+    try { localStorage.setItem("notify",nb.checked?"1":"0"); } catch(err) {}
+    return;
+  }
+
+  // 後 5 碼填好（或清掉）：連同「轉帳」一起存
+  const li=e.target.closest("input[data-lpay]");
+  if (li) {
+    const bk2=S.bookings.find(x=>String(x["預約編號"])===li.dataset.lpay);
+    const v=li.value.trim();
+    if (v&&!/^\d{5}$/.test(v)) { toast("後 5 碼要是 5 位數字"); li.value=bk2["匯款後五碼"]||""; return; }
+    try {
+      await api("setPayment",{id:li.dataset.lpay,method:"轉帳",last5:v});
+      bk2["付款方式"]="轉帳";
+      bk2["匯款後五碼"]=v;
+      toast(v?`已記錄轉帳後 5 碼：${v}`:"已清除後 5 碼");
+    } catch(err) {
+      toast(err.message);
+    }
+    return;
+  }
+
   const s=e.target.closest("select[data-pay]");
   if (!s) return;
 
   const bk=S.bookings.find(x=>String(x["預約編號"])===s.dataset.pay);
+  const l5el=s.nextElementSibling;
+  const l5=(s.value==="轉帳"&&l5el&&l5el.value)?l5el.value.trim():"";
 
   try {
-    await api("setPayment",{id:s.dataset.pay,method:s.value});
+    await api("setPayment",{id:s.dataset.pay,method:s.value,last5:l5});
     bk["付款方式"]=s.value;
-    toast(s.value?`已記錄收款：${s.value}`:"已改為未收款");
+    bk["匯款後五碼"]=l5;
+    toast(s.value?(s.value==="轉帳"?"已記錄收款：轉帳（可填後 5 碼）":`已記錄收款：${s.value}`):"已改為未收款");
   } catch(err) {
     toast(err.message);
     s.value=bk["付款方式"]||"";
@@ -2071,7 +2102,7 @@ function buyForm(m, plans) {
     <div class="row">
       <div style="flex:1 1 120px"><label>應收金額</label><input data-f="price" type="number" min="0" value="${total}" style="width:100%"></div>
       <div style="flex:1 1 120px"><label>已收金額</label><input data-f="paid" type="number" min="0" value="${total}" style="width:100%"></div>
-      <div style="flex:1 1 120px"><label>付款方式</label><select data-f="method"><option value="">選擇</option><option>刷卡</option><option>現金</option><option>轉帳</option></select></div>
+      <div style="flex:1 1 120px"><label>付款方式</label><select data-f="method" data-m5><option value="">選擇</option><option>刷卡</option><option>現金</option><option>轉帳</option></select><input data-f="last5" data-l5 placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px;margin-top:6px" hidden></div>
     </div>
     <div class="row">
       <div style="flex:1 1 150px"><label>專屬教練 1（必填）</label><select data-f="c1">${so(cur[0]||"")}</select></div>
@@ -2094,7 +2125,7 @@ function detailBox(m) {
       ${p.price?`<div class="mute">應收 $${p.price}・已收 $${p.paid}・<b style="color:${p.unpaid?"var(--bad)":"var(--ok)"}">${p.unpaid?"未收 $"+p.unpaid:"已收齊"}</b></div>`:""}
       <div class="row" style="margin-top:8px">
         ${p.unpaid?`<input type="number" min="1" max="${p.unpaid}" value="${p.unpaid}" data-pf="amt" style="width:90px">
-        <select data-pf="method"><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select>
+        <select data-pf="method" data-m5><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select><input data-pf="last5" data-l5 placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px" hidden>
         <button class="b sm" data-payok="${esc(p.id)}" data-row="${m._row}">補收款</button>`:""}
         ${p.id!=="手動調整"&&p.available>0?`<button class="b g sm" data-refund="${esc(p.id)}" data-row="${m._row}">退還堂數</button>`:""}
       </div>
@@ -2228,7 +2259,7 @@ $("mlist").onclick=async e=>{
       toast("已調整堂數");
     } else if (b.dataset.buyok) {
       const coaches=[f("c1"),f("c2")].filter(Boolean);
-      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),coaches};
+      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),last5:f("last5"),coaches};
       if (!coaches.length) { toast("請至少指定 1 位專屬教練"); b.disabled=false; return; }
       if (+body.paid>0&&!body.method) { toast("請選擇付款方式（刷卡／現金／轉帳）"); b.disabled=false; return; }
       const unpaid=(+body.price||0)-(+body.paid||0);
@@ -2238,9 +2269,9 @@ $("mlist").onclick=async e=>{
       toast("已新增課程");
     } else if (b.dataset.payok) {
       const box=b.parentElement;
-      const amount=box.querySelector('[data-pf="amt"]').value, method=box.querySelector('[data-pf="method"]').value;
+      const amount=box.querySelector('[data-pf="amt"]').value, method=box.querySelector('[data-pf="method"]').value, l5el=box.querySelector('[data-pf="last5"]'), last5=(method==="轉帳"&&l5el)?l5el.value.trim():"";
       if (!method) { toast("請選擇付款方式"); b.disabled=false; return; }
-      await api("addPayment",{id:b.dataset.payok,amount,method});
+      await api("addPayment",{id:b.dataset.payok,amount,method,last5});
       toast("已登記收款");
     } else if (b.dataset.refund) {
       const sessions=prompt("退還幾堂？（只能退還尚未使用、未預約的堂數）");
@@ -2252,7 +2283,9 @@ $("mlist").onclick=async e=>{
       if (amount&&+amount>0) {
         method=prompt("退款方式（刷卡／現金／轉帳）：","現金")||"";
       }
-      await api("refundPackage",{...mWho(m),id:b.dataset.refund,sessions,reason:reason.trim(),amount:amount||0,method});
+      const rl5=askLast5(method);
+      if (rl5===null) { b.disabled=false; return; }
+      await api("refundPackage",{...mWho(m),id:b.dataset.refund,sessions,reason:reason.trim(),amount:amount||0,method,last5:rl5});
       toast("已退還堂數");
     } else if (b.dataset.ccoach) {
       const coaches=[f("dc1"),f("dc2")].filter(Boolean);
@@ -2426,46 +2459,10 @@ function syncRentalForm() {
   $("rtRenter").placeholder=kind==="不開放"?"原因（例如：冷氣維修、清潔）":"租借人";
   $("rtAmount").hidden=kind==="不開放";
   $("rtPay").hidden=kind==="不開放";
-
-  // 自由教練模式：選了老師就自動找席位，不用選教室、床位、結束時間
-  const coach=(S.coaches||[]).find(c=>c.phone===$("rtCoach").value);
-  const useCoach=kind==="場租"&&!!coach;
-
-  $("rtCoachRow").hidden=!useCoach;
-  $("rtRoom").hidden=useCoach;
-  $("rtEnd").hidden=useCoach;
-  $("rtTo").hidden=useCoach;
-  $("rtRenter").hidden=useCoach;
-  if (useCoach) $("rtBed").hidden=true;
-  $("rtScope").hidden=useCoach;
-
-  const eq=(coach?coach.equipment:[]);
-  const eopts=['<option value="">不指定器械</option>'].concat((eq.length?eq:(S.equipments||[])).map(x=>`<option>${esc(x)}</option>`)).join("");
-  if ($("rtEquip").dataset.opts!==eopts) {
-    const keepE=$("rtEquip").value;
-    $("rtEquip").innerHTML=eopts;
-    $("rtEquip").dataset.opts=eopts;
-    if (keepE) $("rtEquip").value=keepE;
-  }
-
-  if (useCoach) {
-    const type=$("rtType").value, left=coach.avail[type]||0;
-    const single=(S.rentalPlans||[]).find(p=>p.type===type&&p.times===1);
-    const ok=coach.qualified?"":"　⚠ 尚未完成資格確認，請先到「自由教練」確認";
-    $("rtHint").hidden=false;
-    $("rtHint").textContent=left>0
-      ? `將使用「${type}」場租次數：預約時保留 1 次（目前剩 ${left} 次），上完課按「完成」才核銷。${ok}`
-      : `沒有可用的「${type}」次數方案，將按單次 ${single?"$"+single.total:""} 收費（可先填已收金額與付款方式）。${ok}`;
-    $("rtAmount").placeholder="已收金額（單次付費才填）";
-    $("rtAmount").hidden=left>0;
-    $("rtPay").hidden=left>0;
-  } else {
-    $("rtHint").hidden=true;
-    $("rtAmount").placeholder="金額";
-  }
+  $("rtLast5").hidden=$("rtPay").hidden||$("rtPay").value!=="轉帳";
 }
 
-["rtKind","rtScope","rtRoom","rtCoach","rtType"].forEach(id=>{ $(id).onchange=syncRentalForm; });
+["rtKind","rtScope","rtRoom"].forEach(id=>{ $(id).onchange=syncRentalForm; });
 
 function renderRentals() {
   // 教室選單（內容沒變就不重建，避免打字時選項被重設）
@@ -2475,14 +2472,6 @@ function renderRentals() {
     $("rtRoom").innerHTML=opts;
     $("rtRoom").dataset.opts=opts;
     if (keep) $("rtRoom").value=keep;
-  }
-
-  const copts='<option value="">（不指定，手動登記場租／不開放）</option>'+(S.coaches||[]).map(c=>`<option value="${esc(c.phone)}">自由教練：${esc(c.name)}${c.qualified?"":"（未確認資格）"}</option>`).join("");
-  if ($("rtCoach").dataset.opts!==copts) {
-    const keepC=$("rtCoach").value;
-    $("rtCoach").innerHTML=copts;
-    $("rtCoach").dataset.opts=copts;
-    if (keepC) $("rtCoach").value=keepC;
   }
 
   syncRentalForm();
@@ -2527,10 +2516,10 @@ function renderRentals() {
         pay=`<span class="mute">應收 $${due}・已收 $${got}・<b style="color:${unpaid>0?"var(--bad)":"var(--ok)"}">${unpaid>0?"未收 $"+unpaid:"已收齊"}</b></span>${unpaid>0&&!off?`<button class="b sm" data-rdue="${esc(x.id)}">補收款</button>`:""}`;
       }
     } else if (!closed) {
-      pay=`<select data-rpay="${esc(x.id)}" ${off?"disabled":""}>
+      pay=`<select data-rpay="${esc(x.id)}" data-m5 ${off?"disabled":""}>
           <option value="">未收款</option>
           ${PAYS.map(p=>`<option ${x.method===p?"selected":""}>${p}</option>`).join("")}
-        </select>`;
+        </select><input data-l5 data-rlast5="${esc(x.id)}" value="${esc(x.last5||"")}" placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px" ${x.method==="轉帳"?"":"hidden"} ${off?"disabled":""}>`;
     }
 
     html+=`<div class="bk ${off?"x":""}">
@@ -2553,39 +2542,6 @@ function renderRentals() {
 $("rtAll").onchange=renderRentals;
 
 $("rtAdd").onclick=async()=>{
-  const coach=(S.coaches||[]).find(c=>c.phone===$("rtCoach").value);
-
-  // 自由教練：自動找席位（每次 60 分鐘）
-  if (coach&&$("rtKind").value==="場租") {
-    if (!$("rtDate").value) return toast("請選擇日期");
-    if (!$("rtStart").value) return toast("請選擇開始時間");
-
-    const left=coach.avail[$("rtType").value]||0;
-    const body={
-      coachPhone:coach.phone,
-      type:$("rtType").value,
-      equipment:$("rtEquip").value,
-      date:$("rtDate").value,
-      start:$("rtStart").value,
-      note:$("rtNote").value.trim(),
-      paid:left>0?"":$("rtAmount").value,
-      method:left>0?"":$("rtPay").value
-    };
-
-    const b=$("rtAdd");
-    b.disabled=true;
-    try {
-      const r=await api("addRental",body);
-      ["rtAmount","rtNote"].forEach(id=>$(id).value="");
-      await load();
-      toast(`已預約 ${r.room}・${r.beds.join("、")}（${r.usage==="方案扣次"?"保留 1 次，剩 "+r.remaining+" 次":"單次 $"+r.amount}）`);
-    } catch(err) {
-      toast(err.message);
-    }
-    b.disabled=false;
-    return;
-  }
-
   const body={
     kind:$("rtKind").value,
     scope:$("rtScope").value,
@@ -2597,6 +2553,7 @@ $("rtAdd").onclick=async()=>{
     renter:$("rtRenter").value.trim(),
     amount:$("rtAmount").value,
     method:$("rtPay").value,
+    last5:$("rtLast5").value.trim(),
     note:$("rtNote").value.trim()
   };
 
@@ -2613,7 +2570,7 @@ $("rtAdd").onclick=async()=>{
 
   try {
     await api("addRental",body);
-    ["rtRenter","rtAmount","rtNote"].forEach(id=>$(id).value="");
+    ["rtRenter","rtAmount","rtNote","rtLast5"].forEach(id=>$(id).value="");
     await load();
     toast("已登記場租");
   } catch(err) {
@@ -2646,8 +2603,10 @@ $("rtList").onclick=async e=>{
     if (amount===null) return;
     const method=prompt("付款方式（刷卡／現金／轉帳）：","現金");
     if (method===null) return;
+    const l5=askLast5(method);
+    if (l5===null) return;
     try {
-      await api("addPayment",{id:du.dataset.rdue,amount,method});
+      await api("addPayment",{id:du.dataset.rdue,amount,method,last5:l5});
       await load();
       toast("已登記場租收款");
     } catch(err) {
@@ -2674,191 +2633,38 @@ $("rtList").onclick=async e=>{
 };
 
 $("rtList").onchange=async e=>{
+  // 後 5 碼填好（或清掉）：連同「轉帳」一起存
+  const li=e.target.closest("input[data-rlast5]");
+  if (li) {
+    const x2=(S.rentals||[]).find(r=>String(r.id)===li.dataset.rlast5);
+    const v=li.value.trim();
+    if (v&&!/^\d{5}$/.test(v)) { toast("後 5 碼要是 5 位數字"); li.value=x2.last5||""; return; }
+    try {
+      await api("setRentalPayment",{id:x2.id,method:"轉帳",last5:v});
+      x2.method="轉帳";
+      x2.last5=v;
+      toast(v?`已記錄轉帳後 5 碼：${v}`:"已清除後 5 碼");
+    } catch(err) {
+      toast(err.message);
+    }
+    return;
+  }
+
   const s=e.target.closest("select[data-rpay]");
   if (!s) return;
 
   const x=(S.rentals||[]).find(r=>String(r.id)===s.dataset.rpay);
+  const l5el=s.nextElementSibling;
+  const l5=(s.value==="轉帳"&&l5el&&l5el.value)?l5el.value.trim():"";
 
   try {
-    await api("setRentalPayment",{id:x.id,method:s.value});
+    await api("setRentalPayment",{id:x.id,method:s.value,last5:l5});
     x.method=s.value;
-    toast(s.value?`已記錄收款：${s.value}`:"已改為未收款");
+    x.last5=l5;
+    toast(s.value?(s.value==="轉帳"?"已記錄收款：轉帳（可填後 5 碼）":`已記錄收款：${s.value}`):"已改為未收款");
   } catch(err) {
     toast(err.message);
     s.value=x.method||"";
-  }
-};
-
-/* ---------- 管理員：自由教練 ---------- */
-let CO = [];
-const COPEN = {};   // 電話 → {buy, detail}
-const CODET = {};   // 電話 → getCoachLedger
-
-async function loadCoaches() {
-  try {
-    const j=await api("listCoaches");
-    CO=j.coaches;
-    renderCoaches();
-  } catch(e) {
-    toast(e.message);
-  }
-}
-
-function coachBuyForm(c) {
-  const plans=(S.rentalPlans||[]);
-  const opts=plans.map(p=>`<option value="${esc(p.name)}" data-total="${p.total}">${esc(p.name)}｜$${p.total}（${p.times} 次）</option>`).join("");
-  const total=plans.length?plans[0].total:"";
-
-  return `<div class="mbox" data-cobuy>
-    <b>購買場租方案</b>
-    <label>方案</label><select data-f="plan">${opts}</select>
-    <div class="row">
-      <div style="flex:1 1 130px"><label>應收金額</label><input data-f="price" type="number" min="0" value="${total}" style="width:100%"></div>
-      <div style="flex:1 1 130px"><label>已收金額</label><input data-f="paid" type="number" min="0" value="${total}" style="width:100%"></div>
-      <div style="flex:1 1 120px"><label>付款方式</label><select data-f="method"><option value="">選擇</option><option>刷卡</option><option>現金</option><option>轉帳</option></select></div>
-    </div>
-    <label>效期（選填）</label><input data-f="expiry" type="date" style="width:100%">
-    <button class="b" style="margin-top:12px" data-cobuyok="${esc(c.phone)}">確認購買</button>
-  </div>`;
-}
-
-function coachDetail(c) {
-  const d=CODET[c.phone];
-  if (!d) return '<div class="mbox"><p class="mute none">讀取中…</p></div>';
-
-  const pk=d.packages.filter(p=>String(p.type).indexOf("場租")===0).map(p=>`<div class="pk">
-      <div class="row sp"><b>${esc(p.name)}</b><span class="mute">${esc(p.type)}${p.expiry?"・效期 "+esc(p.expiry)+(p.expired?"（已過期）":""):"・無效期"}</span></div>
-      <div class="mute" style="margin-top:4px">可用 <b>${p.available}</b> 次・保留 ${p.reserved}・帳面 ${p.balance}</div>
-      <div class="mute">應收 $${p.price}・已收 $${p.paid}・<b style="color:${p.unpaid?"var(--bad)":"var(--ok)"}">${p.unpaid?"未收 $"+p.unpaid:"已收齊"}</b></div>
-      ${p.unpaid?`<div class="row" style="margin-top:8px"><input type="number" min="1" max="${p.unpaid}" value="${p.unpaid}" data-pf="amt" style="width:90px">
-        <select data-pf="method"><option value="">付款方式</option><option>刷卡</option><option>現金</option><option>轉帳</option></select>
-        <button class="b sm" data-copay="${esc(p.id)}" data-phone="${esc(c.phone)}">補收款</button></div>`:""}
-    </div>`).join("")||'<p class="mute none">還沒有場租方案。</p>';
-
-  const lg=d.ledger.length?d.ledger.map(x=>`<div>${esc(String(x.time).slice(0,16).replace("T"," "))}　<b>${esc(x.type)}</b>　帳面 ${x.delta>0?"+":""}${x.delta}・保留 ${x.hold>0?"+":""}${x.hold}${x.booking?"・"+esc(x.booking):""}　<span class="mute">${esc(x.by||"")}${x.reason?"・"+esc(x.reason):""}</span></div>`).join(""):'<span class="mute">還沒有異動紀錄。</span>';
-
-  return `<div class="mbox"><b>場租方案明細</b>${pk}
-    <p class="mute" style="margin:14px 0 6px"><b>次數異動紀錄</b>（最近 100 筆）</p>
-    <div class="ledger">${lg}</div></div>`;
-}
-
-function renderCoaches() {
-  $("colist").innerHTML=CO.length?CO.map(c=>{
-    const o=COPEN[c.phone]||{};
-
-    return `<div class="card" data-cocard="${esc(c.phone)}">
-      <div class="row sp">
-        <b>${esc(c.name)}</b>
-        <span><span class="tag ${c.qualified?"t-已預約":"t-待確認"}">${c.qualified?"已確認資格":"未確認資格"}</span>
-        ${c.active?"":'<span class="tag t-已取消">停用</span>'}</span>
-      </div>
-      <div class="mute" style="margin-top:5px">${esc(c.phone)}・核定器械：${c.equipment.length?esc(c.equipment.join("、")):"未設定"}${c.qualDate?"・確認日 "+esc(c.qualDate):""}</div>
-      <div style="margin-top:10px"><span class="mute">剩餘次數</span>　一對一 <b>${c.avail["一對一"]}</b>・一對二 <b>${c.avail["一對二"]}</b></div>
-      <div class="row" style="margin-top:10px">
-        <button class="b sm ${o.buy?"":"g"}" data-co="buy" data-phone="${esc(c.phone)}">購買場租方案</button>
-        <button class="b sm ${o.detail?"":"g"}" data-co="detail" data-phone="${esc(c.phone)}">方案明細</button>
-        <button class="b g sm" data-co="qual" data-phone="${esc(c.phone)}">${c.qualified?"取消資格確認":"完成資格確認"}</button>
-        <button class="b g sm" data-co="equip" data-phone="${esc(c.phone)}">核定器械</button>
-        <button class="b g sm ${c.active?"d":""}" data-co="active" data-phone="${esc(c.phone)}">${c.active?"停用":"啟用"}</button>
-      </div>
-      ${o.buy?coachBuyForm(c):""}
-      ${o.detail?coachDetail(c):""}
-    </div>`;
-  }).join(""):'<div class="card"><p class="mute none">還沒有自由教練，請從上方新增。</p></div>';
-}
-
-async function loadCoachDetail(phone) {
-  try {
-    CODET[phone]=await api("getCoachLedger",{phone});
-  } catch(e) {
-    toast(e.message);
-    CODET[phone]={packages:[],ledger:[]};
-  }
-  renderCoaches();
-}
-
-$("ncAdd").onclick=async()=>{
-  const name=$("ncName").value.trim(), phone=$("ncPhone").value.trim();
-  if (!name||!phone) return toast("請輸入姓名與電話");
-
-  const b=$("ncAdd");
-  b.disabled=true;
-  try {
-    await api("addCoach",{name,phone,equipment:$("ncEquip").value,qualified:$("ncQual").checked});
-    ["ncName","ncPhone"].forEach(id=>$(id).value="");
-    $("ncQual").checked=false;
-    await loadCoaches();
-    await load();
-    toast("已新增自由教練");
-  } catch(err) {
-    toast(err.message);
-  }
-  b.disabled=false;
-};
-
-$("colist").onchange=e=>{
-  const sel=e.target.closest('select[data-f="plan"]');
-  if (!sel) return;
-  const total=sel.selectedOptions[0].dataset.total||"";
-  const box=sel.closest("[data-cobuy]");
-  box.querySelector('[data-f="price"]').value=total;
-  box.querySelector('[data-f="paid"]').value=total;
-};
-
-$("colist").onclick=async e=>{
-  const b=e.target.closest("button[data-co],button[data-cobuyok],button[data-copay]");
-  if (!b) return;
-
-  const card=b.closest("[data-cocard]");
-  const f=k=>{ const el=card&&card.querySelector(`[data-f="${k}"]`); return el?el.value:""; };
-  const phone=b.dataset.phone||b.dataset.cobuyok;
-  const c=CO.find(x=>x.phone===phone);
-  if (!c) return;
-
-  if (b.dataset.co==="buy"||b.dataset.co==="detail") {
-    const o=COPEN[phone]=COPEN[phone]||{};
-    const k=b.dataset.co;
-    o[k]=!o[k];
-    renderCoaches();
-    if (k==="detail"&&o.detail) loadCoachDetail(phone);
-    return;
-  }
-
-  b.disabled=true;
-  try {
-    if (b.dataset.co==="qual") {
-      await api("updateCoach",{phone,qualified:!c.qualified});
-      toast(c.qualified?"已取消資格確認":"已完成資格確認");
-    } else if (b.dataset.co==="equip") {
-      const v=prompt("核定器械（用逗號分隔，例如：核心床,凱迪拉克）：",c.equipment.join(","));
-      if (v===null) { b.disabled=false; return; }
-      await api("updateCoach",{phone,equipment:v});
-      toast("已更新核定器械");
-    } else if (b.dataset.co==="active") {
-      if (!confirm(`${c.active?"停用":"啟用"}「${c.name}」？`)) { b.disabled=false; return; }
-      await api("updateCoach",{phone,active:!c.active});
-    } else if (b.dataset.cobuyok) {
-      const body={phone,plan:f("plan"),price:f("price"),paid:f("paid"),method:f("method"),expiry:f("expiry")};
-      if (+body.paid>0&&!body.method) { toast("請選擇付款方式（刷卡／現金／轉帳）"); b.disabled=false; return; }
-      const unpaid=(+body.price||0)-(+body.paid||0);
-      if (!confirm(`為 ${c.name} 購買「${body.plan}」？\n應收 $${body.price}，已收 $${body.paid}${unpaid>0?`，未收 $${unpaid}`:""}。`)) { b.disabled=false; return; }
-      await api("buyRentalPackage",body);
-      (COPEN[phone]=COPEN[phone]||{}).buy=false;
-      toast("已購買場租方案");
-    } else if (b.dataset.copay) {
-      const box=b.parentElement;
-      const amount=box.querySelector('[data-pf="amt"]').value, method=box.querySelector('[data-pf="method"]').value;
-      if (!method) { toast("請選擇付款方式"); b.disabled=false; return; }
-      await api("addPayment",{id:b.dataset.copay,amount,method});
-      toast("已登記收款");
-    }
-
-    await loadCoaches();
-    await load();
-    if ((COPEN[phone]||{}).detail) await loadCoachDetail(phone);
-  } catch(err) {
-    toast(err.message);
-    b.disabled=false;
   }
 };
 

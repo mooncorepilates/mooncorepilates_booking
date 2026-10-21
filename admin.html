@@ -638,6 +638,26 @@ a {
   margin: 8px 0;
 }
 
+/* 日期、時間輸入框：手機瀏覽器的原生樣式會很大，這裡統一縮小並限制寬度 */
+input[type="date"],
+input[type="time"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-height: 44px;
+  line-height: 1.2;
+  text-align: left;
+}
+
+.mbox input[type="date"] {
+  width: 100%;
+  max-width: 170px;
+}
+
+/* 付款方式選「轉帳」後出現的後 5 碼：和旁邊的欄位留出距離 */
+input[data-l5] {
+  margin-left: 10px;
+}
+
 /* 剩餘堂數 */
 .credit {
   font-family: var(--serif);
@@ -2097,12 +2117,12 @@ function buyForm(m, plans) {
     <div class="row">
       <div style="flex:1 1 120px"><label>課型</label><select data-f="type"><option ${(plans[0]&&plans[0]["課型"]==="一對二")?"":"selected"}>一對一</option><option ${(plans[0]&&plans[0]["課型"]==="一對二")?"selected":""}>一對二</option><option>通用</option></select></div>
       <div style="flex:1 1 120px"><label>贈送堂數</label><input data-f="gift" type="number" min="0" max="100" value="0" style="width:100%"></div>
-      <div style="flex:1 1 150px"><label>效期（選填）</label><input data-f="expiry" type="date" style="width:100%"></div>
+      <div style="flex:0 1 170px"><label>效期（選填）</label><input data-f="expiry" type="date" style="width:100%"></div>
     </div>
     <div class="row">
       <div style="flex:1 1 120px"><label>應收金額</label><input data-f="price" type="number" min="0" value="${total}" style="width:100%"></div>
       <div style="flex:1 1 120px"><label>已收金額</label><input data-f="paid" type="number" min="0" value="${total}" style="width:100%"></div>
-      <div style="flex:1 1 120px"><label>付款方式</label><select data-f="method" data-m5><option value="">選擇</option><option>刷卡</option><option>現金</option><option>轉帳</option></select><input data-f="last5" data-l5 placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:84px;margin-top:6px" hidden></div>
+      <div style="flex:1 1 120px"><label>付款方式</label><select data-f="method" data-m5><option value="">選擇</option><option>刷卡</option><option>現金</option><option>轉帳</option></select><input data-f="last5" data-l5 placeholder="後5碼" inputmode="numeric" maxlength="5" style="width:104px;display:block;margin:8px 0 0" hidden></div>
     </div>
     <div class="row">
       <div style="flex:1 1 150px"><label>專屬教練 1（必填）</label><select data-f="c1">${so(cur[0]||"")}</select></div>

@@ -901,14 +901,14 @@
     '本工作室沒有儲值金，僅提供包堂方案。';
 
   const NOTE_PACKAGE =
-    '您有課程包：預約時會自動扣 1 堂，只會顯示專屬教練有空的時段；同一時段有兩位教練都有空時，可以自己選擇。';
+    '您有課程：預約時會自動扣 1 堂，只會顯示專屬教練有空的時段；同一時段有兩位教練都有空時，可以自己選擇。';
 
   const NOTE_JOINT =
-    '一對二課程需要兩位同行夥伴「共同預約」：兩位都要有一對二課程包，預約時各保留 1 堂，教練由工作室安排。' +
+    '一對二課程需要兩位同行夥伴「共同預約」：兩位都要有一對二課程，預約時各保留 1 堂，教練由工作室安排。' +
     '如果其中一位臨時請假，請與工作室聯繫：可以兩人一起改期，或改成一對一並補差額。';
 
   const NOTE_SINGLE =
-    '目前沒有可用的課程包，將以單堂價格預約，教練由工作室為您安排。想購買課程包請與工作室聯繫。';
+    '目前沒有可用的課程，將以單堂價格預約，教練由工作室為您安排。想購買課程請與工作室聯繫。';
 
   let selectedTime = '';
   let selectedDate = '';
@@ -933,7 +933,7 @@
   let servicesLoaded = false;
   let lastIdKey = '';
 
-  // 這個時段有空的專屬教練（課程包會員才會有），以及客人選的教練
+  // 這個時段有空的專屬教練（課程會員才會有），以及客人選的教練
   let slotCoaches = [];
   let selectedCoach = '';
 
@@ -990,7 +990,7 @@
     return String(name).indexOf(TRIAL_PREFIX) === 0;
   }
 
-  // 正式的一對二（課程包）：兩位學生共同預約
+  // 正式的一對二（課程）：兩位學生共同預約
   function isJointService(name) {
     return !isTrial(name) && String(name).indexOf(TWO_PERSON_KEYWORD) !== -1;
   }
@@ -1082,7 +1082,7 @@
   }
 
   /* ==================================================
-     身分狀態：以 LINE 帳號判斷是不是新生、有沒有課程包、專屬教練是誰
+     身分狀態：以 LINE 帳號判斷是不是新生、有沒有課程、專屬教練是誰
   ================================================== */
 
   function identity() {
@@ -1139,7 +1139,7 @@
 
   }
 
-  // 有課程包 → 顯示「課程包扣 1 堂」；沒有 → 顯示單堂價格
+  // 有課程 → 顯示「課程扣 1 堂」；沒有 → 顯示單堂價格
   function updateServiceLabels() {
 
     const options = $('service').querySelectorAll('optgroup:not([data-trial]) option');
@@ -1150,10 +1150,10 @@
 
       if (isJointService(o.value)) {
 
-        // 一對二：必須使用一對二課程包（兩位都要有），不提供單堂線上預約
+        // 一對二：必須使用一對二課程（兩位都要有），不提供單堂線上預約
         o.textContent = ME.hasTwo
-          ? base + '｜課程包各扣 1 堂（需兩位都有一對二課程包）'
-          : base + '｜需要一對二課程包';
+          ? base + '｜課程各扣 1 堂（需兩位都有一對二課程）'
+          : base + '｜需要一對二課程';
         o.disabled = !ME.hasTwo;
 
         return;
@@ -1161,7 +1161,7 @@
       }
 
       o.textContent = ME.hasPackage
-        ? base + '｜課程包扣 1 堂（剩 ' + ME.credits + ' 堂）'
+        ? base + '｜課程扣 1 堂（剩 ' + ME.credits + ' 堂）'
         : base + '｜單堂 ' + formatMoney(o.dataset.price);
 
     });
@@ -1195,9 +1195,9 @@
 
     box.hidden = false;
     box.textContent = ME.coaches.length
-      ? '您有課程包，剩餘 ' + ME.credits + ' 堂。專屬教練：' +
+      ? '您有課程，剩餘 ' + ME.credits + ' 堂。專屬教練：' +
         ME.coaches.map(function (c) { return c.name; }).join('、') + '。'
-      : '您有課程包（剩餘 ' + ME.credits + ' 堂），但還沒有指定專屬教練，暫時無法線上預約，請與工作室聯繫。';
+      : '您有課程（剩餘 ' + ME.credits + ' 堂），但還沒有指定專屬教練，暫時無法線上預約，請與工作室聯繫。';
 
   }
 
@@ -1277,7 +1277,7 @@
           ME.hasPackage, ME.hasTwo, ME.credits, ME.coaches.map(function (c) { return c.account; }), ME.trialEligible
         ]);
 
-        // 身分狀態變了（例如輸入電話後認出課程包），可預約日期與時段要重新查
+        // 身分狀態變了（例如輸入電話後認出課程），可預約日期與時段要重新查
         if (meReady && before !== after) {
 
           selectedTime = '';
@@ -1631,7 +1631,7 @@
      取得可預約時間
   ================================================== */
 
-  // 選了時段後：課程包會員依有空的教練數量，自動帶入或讓客人選
+  // 選了時段後：課程會員依有空的教練數量，自動帶入或讓客人選
   function onTimePicked(entry) {
 
     selectedCoach = '';
@@ -1731,7 +1731,7 @@
 
       if (result.noCoach) {
         container.innerHTML =
-          '<div class="no-time">您的課程包還沒有指定專屬教練，請與工作室聯繫。</div>';
+          '<div class="no-time">您的課程還沒有指定專屬教練，請與工作室聯繫。</div>';
         return;
       }
 
@@ -1833,7 +1833,7 @@
 
   /* ==================================================
      確認預約
-     - 是否為新生、有沒有課程包，一律由後端判斷
+     - 是否為新生、有沒有課程，一律由後端判斷
      - 體驗課限新生、每人一次；正式課程有剩餘堂數會自動扣堂
   ================================================== */
 
@@ -1965,10 +1965,10 @@
 
   function renderSuccessMessage(result, sentToLine) {
 
-    const isPackage = result.paymentType === '課程包扣堂';
+    const isPackage = result.paymentType === '課程扣堂';
 
     const fee = isPackage
-      ? '課程包扣 1 堂（剩餘 ' + (result.remainingSessions || 0) + ' 堂）'
+      ? '課程扣 1 堂（剩餘 ' + (result.remainingSessions || 0) + ' 堂）'
       : formatMoney(result.price || 0);
 
     $('message').innerHTML =
@@ -2055,7 +2055,7 @@
 
     hideCoachChoices();
 
-    // 預約後課程包堂數、新生身分都可能變了，重新查一次
+    // 預約後課程堂數、新生身分都可能變了，重新查一次
     lastIdKey = '';
     refreshMyStatus();
 

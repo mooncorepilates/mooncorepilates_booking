@@ -1076,7 +1076,7 @@ const TITLES = {
   rentals:["場租","登記教室出租、維修或不開放時段；登記後那間教室（或那張床）不會再被客戶預約。"],
   staff:["員工","新增員工帳號、改姓名、停用或重設密碼。員工第一次用初始密碼登入後要自己改密碼。"],
   myfree:["我的空檔","點選日期，標示你那天哪些時段有空；管理員會依這裡分配課程。"],
-  myjobs:["我的課表","管理員指派給你的課程。"]
+  myjobs:["我的課表","管理員指派給你的課程。課程結束後，可以在這裡確認完成、取消或改期。"]
 };
 
 function toast(m) {
@@ -1414,6 +1414,13 @@ const pkey = p => String(p||"").replace(/\D/g,"").replace(/^0+/,"");
 const memberOf = p => S.members.find(m=>pkey(m["電話"])===pkey(p));
 const PAYS = ["刷卡","現金","轉帳"];
 
+// 讀這張預約卡片／會員卡片上「LINE 通知學生」的勾選（找不到就視為通知）
+const notifyOf = el => { const c=el&&el.closest&&el.closest(".bk"); const cb=c&&c.querySelector&&c.querySelector("input[data-notify]"); return cb?cb.checked:true; };
+const mnotifyOf = el => { const c=el&&el.closest&&el.closest("[data-card]"); const cb=c&&c.querySelector&&c.querySelector("input[data-mnotify]"); return cb?cb.checked:true; };
+
+// 動作結果後面接的通知說明
+const notifyTail = (r,notify) => !notify?"（未通知學生）":(r&&r.notified===false?`（LINE 通知未送出：${r.notifyError}）`:(r&&r.notified===true?"，已通知學生":""));
+
 // 「確認／完成時 LINE 通知學生」的預設勾選（記在這台瀏覽器）
 const notifyDefault = () => { try { return localStorage.getItem("notify")!=="0"; } catch(e) { return true; } };
 
@@ -1480,7 +1487,8 @@ function jointRow(b,id,st) {
   return html;
 }
 
-async function rescheduleUI(id,date,time,force) {
+async function rescheduleUI(id,date,time,force,notify) {
+  if (notify===undefined) notify=true;
   const bk=S.bookings.find(x=>String(x["預約編號"])===id);
   if (!bk) return;
 
@@ -1492,21 +1500,22 @@ async function rescheduleUI(id,date,time,force) {
   }
 
   try {
-    const r=await api("rescheduleBooking",{id,date:date.trim(),time:time.trim(),force:!!force});
+    const r=await api("rescheduleBooking",{id,date:date.trim(),time:time.trim(),force:!!force,notify});
 
     if (r.needConfirm) {
-      if (confirm(r.message+"\n\n仍要改期嗎？")) return rescheduleUI(id,date,time,true);
+      if (confirm(r.message+"\n\n仍要改期嗎？")) return rescheduleUI(id,date,time,true,notify);
       return;
     }
 
     await load();
-    toast(`已改期到 ${r.date} ${r.time}`);
+    toast(`已改期到 ${r.date} ${r.time}${notifyTail(r,notify)}`);
   } catch(err) {
     toast(err.message);
   }
 }
 
-async function convertUI(id) {
+async function convertUI(id,notify) {
+  if (notify===undefined) notify=true;
   try {
     const q=await api("convertQuote",{id});
     const due=prompt(`${q.absent} 請假，改成一對一給 ${q.attendee}。\n一對一單堂 $${q.singlePrice}；${q.attendee} 的課程每堂約 $${q.perSession}。\n請輸入補差額金額（建議 $${q.suggested}，不收請填 0）：`,String(q.suggested));
@@ -1525,15 +1534,16 @@ async function convertUI(id) {
 
     if (!confirm(`確定改成一對一？\n・${q.absent}：解除保留，不扣課\n・${q.attendee}：補差額 $${+due||0}，已收 $${+paid||0}`)) return;
 
-    const r=await api("convertToSingle",{id,due,paid,method,last5:l5});
+    const r=await api("convertToSingle",{id,due,paid,method,last5:l5,notify});
     await load();
-    toast(`已改成一對一${r.unpaid>0?`，未收 $${r.unpaid}`:""}`);
+    toast(`已改成一對一${r.unpaid>0?`，未收 $${r.unpaid}`:""}${notifyTail(r,notify)}`);
   } catch(err) {
     toast(err.message);
   }
 }
 
-async function dueUI(id) {
+async function dueUI(id,notify) {
+  if (notify===undefined) notify=true;
   const amount=prompt("補收多少？");
   if (amount===null) return;
 
@@ -1544,9 +1554,9 @@ async function dueUI(id) {
   if (l5===null) return;
 
   try {
-    await api("addPayment",{id,amount,method,last5:l5});
+    const r=await api("addPayment",{id,amount,method,last5:l5,notify});
     await load();
-    toast("已登記補差額收款");
+    toast("已登記補差額收款"+notifyTail(r,notify));
   } catch(err) {
     toast(err.message);
   }
@@ -1599,7 +1609,7 @@ function bkCard(b) {
     <div class="mute">${pack?"課程扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
     ${b["系統備註"]?`<div class="sysnote">${esc(b["系統備註"])}</div>`:""}
     <label class="mute" style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px">
-      <input type="checkbox" data-notify="${id}" ${notifyDefault()?"checked":""}> 確認／完成時 LINE 通知學生
+      <input type="checkbox" data-notify="${id}" ${notifyDefault()?"checked":""}> 操作時 LINE 通知學生（確認、完成、取消、改期、指派教練、補差額）
     </label>
     <div class="row" style="margin-top:8px">
       <button class="b sm" data-act="ok" data-id="${id}" ${st==="已預約"?"disabled":""}>確認</button>
@@ -1690,14 +1700,15 @@ function renderStaffInfo() {
   box.innerHTML=`<div class="row sp"><b>${md(ds)} 員工空檔</b><span class="mute">${un?`還有 ${un} 筆未指派教練`:"全部已指派"}</span></div>${rows}`;
 }
 
-async function assignCoachUI(id,account,force) {
+async function assignCoachUI(id,account,force,notify) {
+  if (notify===undefined) notify=true;
   const bk=S.bookings.find(x=>String(x["預約編號"])===id);
 
   try {
-    const r=await api("assignCoach",{id,account,force:!!force});
+    const r=await api("assignCoach",{id,account,force:!!force,notify});
 
     if (r.needConfirm) {
-      if (confirm(r.message+"\n\n仍要指派嗎？")) return assignCoachUI(id,account,true);
+      if (confirm(r.message+"\n\n仍要指派嗎？")) return assignCoachUI(id,account,true,notify);
       renderBookings();
       return;
     }
@@ -1706,7 +1717,7 @@ async function assignCoachUI(id,account,force) {
     bk["教練帳號"]=account;
     bk["教練"]=st?st.name:"";
     renderBookings();
-    toast(account?`已指派給 ${st?st.name:account}`:"已取消指派");
+    toast(account?`已指派給 ${st?st.name:account}${notifyTail(r,notify)}`:"已取消指派");
   } catch(err) {
     toast(err.message);
     renderBookings();
@@ -1769,9 +1780,9 @@ $("bview").onclick=async e=>{
 
   const act=b.dataset.act, id=b.dataset.id;
 
-  if (act==="resched") return rescheduleUI(id);
-  if (act==="convert") return convertUI(id);
-  if (act==="duepay") return dueUI(id);
+  if (act==="resched") return rescheduleUI(id,undefined,undefined,false,notifyOf(b));
+  if (act==="convert") return convertUI(id,notifyOf(b));
+  if (act==="duepay") return dueUI(id,notifyOf(b));
 
   const status={ok:"已預約",done:"已完成",no:"已取消"}[act];
   const label={ok:"已確認",done:"已完成",no:"已取消"}[act];
@@ -1797,7 +1808,8 @@ $("bview").onclick=async e=>{
     if (r.stats) msg+=`・剩餘 ${r.stats.credits} 堂`;
     else if (r.creditNote) msg+="・"+r.creditNote;
     if (r.notified===false) msg+=`（LINE 通知未送出：${r.notifyError}）`;
-    else if (!notify&&(act==="ok"||act==="done")) msg+="（未通知學生）";
+    else if (!notify&&(act==="ok"||act==="done"||act==="no")) msg+="（未通知學生）";
+    else if (notify&&act==="no"&&r.notified===true) msg+="，已通知學生";
     toast(msg);
   } catch(err) {
     toast(err.message);
@@ -1820,7 +1832,7 @@ $("bview").onchange=async e=>{
   }
 
   const c=e.target.closest("select[data-coach]");
-  if (c) return assignCoachUI(c.dataset.coach,c.value);
+  if (c) return assignCoachUI(c.dataset.coach,c.value,false,notifyOf(c));
 
   const rm=e.target.closest("select[data-room]");
   if (rm) return assignRoomUI(rm.dataset.room,rm.value);
@@ -2194,6 +2206,9 @@ function renderMembers() {
         </div>
       </div>
       <div class="mute" style="margin-top:6px">專屬教練：${cc?esc(cc):"尚未指定"}</div>
+      <label class="mute" style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:8px">
+        <input type="checkbox" data-mnotify="${m._row}" ${notifyDefault()?"checked":""}> 操作時 LINE 通知學生（購買課程、調整堂數、退還、補收款、更換教練）
+      </label>
       <div class="row" style="margin-top:10px">
         ${plans.length?`<button class="b sm ${o.buy?"":"g"}" data-mtoggle="buy" data-row="${m._row}">購買課程</button>`:""}
         <button class="b sm ${o.detail?"":"g"}" data-mtoggle="detail" data-row="${m._row}">課程明細</button>
@@ -2222,6 +2237,12 @@ async function loadDetail(row) {
 $("mq").oninput=renderMembers;
 
 $("mlist").onchange=async e=>{
+  const mn=e.target.closest&&e.target.closest("input[data-mnotify]");
+  if (mn) {
+    try { localStorage.setItem("notify",mn.checked?"1":"0"); } catch(err) {}
+    return;
+  }
+
   // 選方案時帶入應收／已收金額
   const sel=e.target.closest('select[data-f="plan"]');
   if (sel) {
@@ -2258,6 +2279,7 @@ $("mlist").onclick=async e=>{
 
   const card=b.closest("[data-card]");
   const f=k=>{ const el=card.querySelector(`[data-f="${k}"]`); return el?el.value:""; };
+  const mnotify=mnotifyOf(b);
 
   // 展開／收合
   if (b.dataset.mtoggle) {
@@ -2275,24 +2297,24 @@ $("mlist").onclick=async e=>{
       const delta=+b.dataset.adj;
       const note=prompt(`${m["姓名"]} 的可預約堂數 ${delta>0?"+":"−"}1。\n請填寫調整原因（必填，會留在堂數異動紀錄）：`);
       if (note===null||!note.trim()) { if (note!==null) toast("請填寫調整原因"); b.disabled=false; return; }
-      await api("adjustSessions",{...mWho(m),delta,note:note.trim()});
-      toast("已調整堂數");
+      const r1=await api("adjustSessions",{...mWho(m),delta,note:note.trim(),notify:mnotify});
+      toast("已調整堂數"+notifyTail(r1,mnotify));
     } else if (b.dataset.buyok) {
       const coaches=[f("c1"),f("c2")].filter(Boolean);
-      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),last5:f("last5"),coaches};
+      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),last5:f("last5"),coaches,notify:mnotify};
       if (!coaches.length) { toast("請至少指定 1 位專屬教練"); b.disabled=false; return; }
       if (+body.paid>0&&!body.method) { toast("請選擇付款方式（刷卡／現金／轉帳）"); b.disabled=false; return; }
       const unpaid=(+body.price||0)-(+body.paid||0);
       if (!confirm(`為 ${m["姓名"]} 新增「${body.plan}」${+body.gift?`（贈 ${body.gift} 堂）`:""}？\n應收 $${body.price}，已收 $${body.paid}${unpaid>0?`，未收 $${unpaid}`:""}。`)) { b.disabled=false; return; }
-      await api("addPackage",body);
+      const r2=await api("addPackage",body);
       (MOPEN[row]=MOPEN[row]||{}).buy=false;
-      toast("已新增課程");
+      toast("已新增課程"+notifyTail(r2,mnotify));
     } else if (b.dataset.payok) {
       const box=b.parentElement;
       const amount=box.querySelector('[data-pf="amt"]').value, method=box.querySelector('[data-pf="method"]').value, l5el=box.querySelector('[data-pf="last5"]'), last5=(method==="轉帳"&&l5el)?l5el.value.trim():"";
       if (!method) { toast("請選擇付款方式"); b.disabled=false; return; }
-      await api("addPayment",{id:b.dataset.payok,amount,method,last5});
-      toast("已登記收款");
+      const r3=await api("addPayment",{id:b.dataset.payok,amount,method,last5,notify:mnotify});
+      toast("已登記收款"+notifyTail(r3,mnotify));
     } else if (b.dataset.refund) {
       const sessions=prompt("退還幾堂？（只能退還尚未使用、未預約的堂數）");
       if (sessions===null) { b.disabled=false; return; }
@@ -2305,12 +2327,12 @@ $("mlist").onclick=async e=>{
       }
       const rl5=askLast5(method);
       if (rl5===null) { b.disabled=false; return; }
-      await api("refundPackage",{...mWho(m),id:b.dataset.refund,sessions,reason:reason.trim(),amount:amount||0,method,last5:rl5});
-      toast("已退還堂數");
+      const r4=await api("refundPackage",{...mWho(m),id:b.dataset.refund,sessions,reason:reason.trim(),amount:amount||0,method,last5:rl5,notify:mnotify});
+      toast("已退還堂數"+notifyTail(r4,mnotify));
     } else if (b.dataset.ccoach) {
       const coaches=[f("dc1"),f("dc2")].filter(Boolean);
-      await api("setMemberCoaches",{...mWho(m),coaches});
-      toast("已更新專屬教練");
+      const r5=await api("setMemberCoaches",{...mWho(m),coaches,notify:mnotify});
+      toast("已更新專屬教練"+notifyTail(r5,mnotify));
     }
 
     await load();
@@ -2889,33 +2911,139 @@ function renderStaffEd() {
   $("fchips").innerHTML=biz.map(s=>`<button class="chip ${mine.has(s)?"on":""}" data-t="${s}">${s}</button>`).join("");
 }
 
+function jobCard(x) {
+  const active=x.status==="已預約"||x.status==="待確認";
+  const done=x.status==="已完成";
+  const service=esc(String(x.service).replace(/^(體驗課|正式課程)[｜|]\s*/,""));
+  const joint=(x.parts||[]).length>1;
+
+  return `<div class="bk">
+    <div class="row sp">
+      <b>${esc(x.time)}　${service}</b>
+      <span class="tag t-${esc(x.status)}">${esc(x.status)}</span>
+    </div>
+    <div>${esc(x.name)}${x.room?"・"+esc(x.room):""}</div>
+    ${joint?`<div class="pk"><b>參與者</b>${x.parts.map(p=>`<div class="row sp" style="margin:6px 0"><span>${esc(p.name)}<span class="mute">（${esc(p.role)}）</span></span>
+        <select data-jatt="${esc(x.id)}" data-key="${esc(p.key)}" ${active?"":"disabled"}>
+          <option ${p.attendance!=="請假"?"selected":""}>待上課</option><option ${p.attendance==="請假"?"selected":""}>請假</option>
+        </select></div>`).join("")}
+      <div class="mute" style="margin-top:4px">有人請假時，請告知管理員處理（兩人一起改期，或改一對一補差額）。</div></div>`:""}
+    ${(active||done)?`<label class="mute" style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px">
+      <input type="checkbox" data-jnotify ${notifyDefault()?"checked":""}> 操作時 LINE 通知學生
+    </label>`:""}
+    <div class="row" style="margin-top:8px">
+      ${active?`<button class="b sm" data-jact="done" data-id="${esc(x.id)}" ${x.canComplete?"":"disabled"}>${x.canComplete?"完成":"課程開始後可完成"}</button>
+      <button class="b g sm" data-jact="resched" data-id="${esc(x.id)}">改期</button>
+      <button class="b sm d" data-jact="cancel" data-id="${esc(x.id)}">取消</button>`:""}
+      ${done?`<button class="b g sm" data-jact="undo" data-id="${esc(x.id)}">更正（改回未完成）</button>`:""}
+    </div>
+  </div>`;
+}
+
 function renderJobs() {
-  const a=ST.assigned;
+  const a=ST.assigned||[];
 
   if (!a.length) {
     $("jlist").innerHTML='<p class="mute none">目前沒有指派給你的課。</p>';
     return;
   }
 
-  let html="", cur="";
+  const need=a.filter(x=>(x.status==="已預約"||x.status==="待確認")&&x.started);
+  const next=a.filter(x=>(x.status==="已預約"||x.status==="待確認")&&!x.started);
+  const done=a.filter(x=>x.status==="已完成").slice().reverse();
 
-  a.forEach(x=>{
-    if (x.date!==cur) {
-      cur=x.date;
-      html+=`<div class="dh ${x.date===today()?"now":""}" style="${html?"":"margin-top:0"}">${md(x.date)}</div>`;
+  const group=(title,list,hint)=>{
+    if (!list.length) return "";
+    let html=`<div class="dh now" style="margin-top:14px">${title}</div>${hint?`<p class="mute" style="margin:4px 0 8px">${hint}</p>`:""}`;
+    let cur="";
+    list.forEach(x=>{
+      if (x.date!==cur) { cur=x.date; html+=`<div class="mute" style="margin:10px 0 4px;font-weight:700">${md(x.date)}</div>`; }
+      html+=jobCard(x);
+    });
+    return html;
+  };
+
+  $("jlist").innerHTML=
+    group("待確認完成（已上過的課）",need,"課程結束後請確認：完成、取消或改期。")+
+    group("即將上課",next,"")+
+    group("已完成（近 14 天，按錯可以更正）",done,"")||'<p class="mute none">目前沒有需要處理的課。</p>';
+}
+
+async function staffActUI(act,id,notify,extra) {
+  try {
+    let r;
+
+    if (act==="done") r=await api("staffSetStatus",{id,status:"已完成",notify});
+    else if (act==="cancel") r=await api("staffSetStatus",{id,status:"已取消",notify});
+    else if (act==="undo") r=await api("staffSetStatus",{id,status:"已預約",notify});
+    else {
+      r=await api("staffReschedule",{id,date:extra.date,time:extra.time,force:!!extra.force,notify});
+
+      if (r.needConfirm) {
+        if (confirm(r.message+"\n\n仍要改期嗎？")) return staffActUI(act,id,notify,{...extra,force:true});
+        return;
+      }
     }
 
-    html+=`<div class="bk">
-      <div class="row sp">
-        <b>${esc(x.time)}　${esc(String(x.service).replace(/^(體驗課|正式課程)[｜|]\s*/,""))}</b>
-        <span class="tag t-${esc(x.status)}">${esc(x.status)}</span>
-      </div>
-      <div>${esc(x.name)}${x.room?"・"+esc(x.room):""}</div>
-    </div>`;
-  });
-
-  $("jlist").innerHTML=html;
+    await loadStaff();
+    const label={done:"已完成",cancel:"已取消",undo:"已改回未完成",resched:"已改期"}[act];
+    toast(label+(act==="resched"&&r.date?`到 ${r.date} ${r.time}`:"")+(r.creditNote?"・"+r.creditNote:"")+notifyTail(r,notify));
+  } catch(err) {
+    toast(err.message);
+  }
 }
+
+$("jlist").onclick=async e=>{
+  const b=e.target.closest("button[data-jact]");
+  if (!b) return;
+
+  const act=b.dataset.jact, id=b.dataset.id;
+  const x=(ST.assigned||[]).find(v=>String(v.id)===id);
+  if (!x) return;
+
+  const holder=b.closest&&b.closest(".bk");
+  const cb=holder&&holder.querySelector&&holder.querySelector("input[data-jnotify]");
+  const notify=cb?cb.checked:true;
+
+  if (act==="resched") {
+    const date=prompt(`改期：${x.name}（目前 ${x.date} ${x.time}）\n請輸入新的日期（例如 2026-11-05）：`,x.date);
+    if (date===null) return;
+    const time=prompt("請輸入新的時間（例如 14:00）：",x.time);
+    if (time===null) return;
+    return staffActUI("resched",id,notify,{date:date.trim(),time:time.trim()});
+  }
+
+  const ask={
+    done:`${x.name} ${x.date} ${x.time} 的課已經上完了？\n${notify?"會 LINE 通知學生本堂完成與剩餘堂數。":"不會 LINE 通知學生。"}`,
+    cancel:`確定取消 ${x.name} ${x.date} ${x.time} 的課？\n課程扣堂的會退回 1 堂。${notify?"會 LINE 通知學生。":""}`,
+    undo:`把 ${x.name} ${x.date} ${x.time} 改回「已預約」？\n已扣的堂數會補回並重新保留。`
+  }[act];
+
+  if (!confirm(ask)) return;
+
+  b.disabled=true;
+  await staffActUI(act,id,notify);
+};
+
+$("jlist").onchange=async e=>{
+  const cb=e.target.closest&&e.target.closest("input[data-jnotify]");
+  if (cb) {
+    try { localStorage.setItem("notify",cb.checked?"1":"0"); } catch(err) {}
+    return;
+  }
+
+  const s=e.target.closest&&e.target.closest("select[data-jatt]");
+  if (!s) return;
+
+  try {
+    await api("staffSetAttendance",{id:s.dataset.jatt,key:s.dataset.key,value:s.value});
+    await loadStaff();
+    toast(s.value==="請假"?"已標記請假":"已恢復待上課");
+  } catch(err) {
+    toast(err.message);
+    renderJobs();
+  }
+};
 
 $("fp").onclick=()=>{ ST.ms=addMonth(ST.ms,-1); ST.sel=""; renderStaff(); };
 $("fn").onclick=()=>{ ST.ms=addMonth(ST.ms,1); ST.sel=""; renderStaff(); };

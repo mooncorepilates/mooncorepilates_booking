@@ -714,6 +714,11 @@
       box-shadow: none;
     }
 
+  
+    [hidden] {
+      display: none !important;
+    }
+
   </style>
 
 </head>
@@ -742,7 +747,7 @@
 
 <main class="container">
 
-  <section class="booking-card">
+  <section class="booking-card" id="bookView">
 
     <div class="section-title">
       預約課程
@@ -960,6 +965,7 @@
   });
 
   $('submitButton').addEventListener('click', submitReservation);
+
   $('service').addEventListener('change', function () { onServiceChange(true); });
 
   async function checkServiceStatus() {
@@ -2019,7 +2025,7 @@
 
   function showServiceDisabledOverlay() {
 
-    document.querySelector('.booking-card').innerHTML =
+    $('bookView').innerHTML =
       '<div class="success">' +
         '<div class="success-title">🛠 服務暫停中</div>' +
         '<div class="success-notice">' +

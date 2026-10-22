@@ -923,6 +923,12 @@
   let monthAvailabilityKey = '';
   let monthAvailabilityFailed = false;
 
+  // 整個月的資料（日期＋每天時段）依「課程＋身分＋月份」快取；點日期、切月份都不用再等伺服器
+  let monthSlots = {};
+  const monthCache = {};
+  const monthInflight = {};
+  const CACHE_FRESH_MS = 30000;
+
   // lineUserId 僅用於畫面判斷，不會傳給後端當作身分依據
   let lineUserId = '';
 
@@ -935,6 +941,7 @@
   // 以 LINE 帳號判斷的身分狀態（由後端 getMyStatus 回傳）
   let ME = { bound: false, hasPackage: false, hasTwo: false, credits: 0, coaches: [], trialEligible: true };
   let meReady = false;
+  let liffSettled = false;
   let servicesLoaded = false;
   let lastIdKey = '';
 
@@ -956,8 +963,9 @@
 
     // LINE 查詢太久沒回應時，不要一直卡在讀取畫面
     setTimeout(function () {
-      if (!meReady) {
+      if (!meReady || !liffSettled) {
         meReady = true;
+        liffSettled = true;
         maybeRenderCalendar();
       }
     }, 8000);
@@ -1099,8 +1107,9 @@
     };
   }
 
+  // 課程清單載入好、LINE 登入完成（或確定無法登入）就開始載入日期，不必等身分狀態查詢
   function maybeRenderCalendar() {
-    if (servicesLoaded && meReady) renderCalendar();
+    if (servicesLoaded && (liffSettled || meReady)) renderCalendar();
   }
 
   function noteFor(name) {
@@ -1284,7 +1293,7 @@
         ]);
 
         // 身分狀態變了（例如輸入電話後認出課程），可預約日期與時段要重新查
-        if (meReady && before !== after) {
+        if (before !== after && servicesLoaded) {
 
           selectedTime = '';
           hideCoachChoices();
@@ -1358,6 +1367,59 @@
     return year + '-' + pad2(month + 1);
   }
 
+  function monthCacheKey(ym) {
+
+    const id = identity();
+
+    return [$('service').value, id.phone, id.name, ym].join('|');
+
+  }
+
+  // 向伺服器取得整個月（同一個月同時間只會發一次請求）
+  function fetchMonth(ym) {
+
+    const cacheKey = monthCacheKey(ym);
+
+    if (monthInflight[cacheKey]) return monthInflight[cacheKey];
+
+    monthInflight[cacheKey] = callGAS(
+      'getAvailableDatesInMonth',
+      Object.assign({ yearMonth: ym, service: $('service').value }, identity())
+    ).then(function (result) {
+
+      if (!result || !result.success) throw new Error('讀取可預約日期失敗');
+
+      monthCache[cacheKey] = {
+        dates: result.dates || {},
+        slots: result.slots || {},
+        noCoach: !!result.noCoach,
+        at: Date.now()
+      };
+
+      return monthCache[cacheKey];
+
+    }).finally(function () {
+
+      delete monthInflight[cacheKey];
+
+    });
+
+    return monthInflight[cacheKey];
+
+  }
+
+  // 先在背景把下個月也載好，切到下個月就是立刻顯示
+  function prefetchMonth(year, month) {
+
+    const next = new Date(year, month + 1, 1);
+    const ym = toYearMonthStr(next.getFullYear(), next.getMonth());
+
+    if (monthCache[monthCacheKey(ym)] || monthInflight[monthCacheKey(ym)]) return;
+
+    fetchMonth(ym).catch(function () { /* 預先載入失敗不影響使用 */ });
+
+  }
+
   async function ensureMonthAvailability(year, month) {
 
     const key = toYearMonthStr(year, month);
@@ -1366,29 +1428,25 @@
 
     try {
 
-      const result = await callGAS(
-        'getAvailableDatesInMonth',
-        Object.assign({ yearMonth: key, service: $('service').value }, identity())
-      );
+      const cached = monthCache[monthCacheKey(key)] || await fetchMonth(key);
 
-      if (result && result.success) {
-        monthAvailability = result.dates || {};
-        monthAvailabilityFailed = false;
-      } else {
-        monthAvailability = {};
-        monthAvailabilityFailed = true;
-      }
+      monthAvailability = cached.dates;
+      monthSlots = cached.slots;
+      monthAvailabilityFailed = false;
 
     } catch (error) {
 
       console.error('ensureMonthAvailability ERROR:', error);
 
       monthAvailability = {};
+      monthSlots = {};
       monthAvailabilityFailed = true;
 
     }
 
     monthAvailabilityKey = key;
+
+    prefetchMonth(year, month);
 
   }
 
@@ -1572,6 +1630,8 @@
       }
 
       liffReady = true;
+      liffSettled = true;
+      maybeRenderCalendar();
       refreshMyStatus();
 
       status.innerText = '✓ LINE 已連線';
@@ -1583,6 +1643,8 @@
 
       status.innerText = 'LINE 初始化失敗';
       status.classList.add('error-status');
+
+      liffSettled = true;
 
       if (!meReady) {
         meReady = true;
@@ -1694,6 +1756,95 @@
 
   }
 
+  // 把時段畫到畫面上（來源可以是快取，也可以是伺服器回傳）
+  function renderTimes(date, times, noCoach) {
+
+    const container = $('times');
+
+    container.innerHTML = '';
+
+    if (noCoach) {
+      container.innerHTML =
+        '<div class="no-time">您的課程還沒有指定專屬教練，請與工作室聯繫。</div>';
+      return;
+    }
+
+    if (!times || times.length === 0) {
+      container.innerHTML = '<div class="no-time">這天沒有可預約時段</div>';
+      return;
+    }
+
+    times.forEach(function (entry) {
+
+      const time = typeof entry === 'string' ? entry : entry.time;
+
+      const backendAvailable =
+        typeof entry === 'string' ? true : (entry.available !== false);
+
+      const isDisabled = !backendAvailable || isTimeInPast(date, time);
+
+      const button = document.createElement('button');
+
+      button.type = 'button';
+      button.className = 'time-button' + (isDisabled ? ' disabled' : '');
+      button.innerText = formatTime(time);
+
+      if (isDisabled) {
+
+        button.disabled = true;
+
+      } else {
+
+        button.addEventListener('click', function () {
+
+          selectedTime = time;
+
+          document.querySelectorAll('.time-button').forEach(function (btn) {
+            btn.classList.remove('selected');
+          });
+
+          button.classList.add('selected');
+
+          onTimePicked(entry);
+
+        });
+
+      }
+
+      container.appendChild(button);
+
+    });
+
+  }
+
+  // 背景悄悄更新這個月；使用者還沒選時段時，才會把畫面換成最新的
+  async function refreshMonthQuietly(date) {
+
+    const ym = date.slice(0, 7);
+
+    delete monthCache[monthCacheKey(ym)];
+
+    try {
+
+      const fresh = await fetchMonth(ym);
+
+      if (monthAvailabilityKey === ym) {
+        monthAvailability = fresh.dates;
+        monthSlots = fresh.slots;
+      }
+
+      if (date === selectedDate && !selectedTime) {
+        renderTimes(date, fresh.slots[date] || [], fresh.noCoach);
+      }
+
+    } catch (error) {
+
+      // 背景更新失敗就維持原本的畫面
+
+    }
+
+  }
+
   async function loadTimes() {
 
     selectedTime = '';
@@ -1705,6 +1856,19 @@
     if (!date) {
       container.innerHTML = '<div class="no-time">請先選擇日期</div>';
       return;
+    }
+
+    // 快取裡有這個月的資料：馬上顯示；資料超過 30 秒就在背景更新
+    const cached = monthCache[monthCacheKey(date.slice(0, 7))];
+
+    if (cached && cached.slots && cached.slots[date]) {
+
+      renderTimes(date, cached.slots[date], cached.noCoach);
+
+      if (Date.now() - cached.at > CACHE_FRESH_MS) refreshMonthQuietly(date);
+
+      return;
+
     }
 
     container.innerHTML =
@@ -1731,61 +1895,7 @@
         throw new Error(result && result.message ? result.message : '讀取時段失敗');
       }
 
-      const times = result.times || [];
-
-      container.innerHTML = '';
-
-      if (result.noCoach) {
-        container.innerHTML =
-          '<div class="no-time">您的課程還沒有指定專屬教練，請與工作室聯繫。</div>';
-        return;
-      }
-
-      if (times.length === 0) {
-        container.innerHTML = '<div class="no-time">這天沒有可預約時段</div>';
-        return;
-      }
-
-      times.forEach(function (entry) {
-
-        const time = typeof entry === 'string' ? entry : entry.time;
-
-        const backendAvailable =
-          typeof entry === 'string' ? true : (entry.available !== false);
-
-        const isDisabled = !backendAvailable || isTimeInPast(date, time);
-
-        const button = document.createElement('button');
-
-        button.type = 'button';
-        button.className = 'time-button' + (isDisabled ? ' disabled' : '');
-        button.innerText = formatTime(time);
-
-        if (isDisabled) {
-
-          button.disabled = true;
-
-        } else {
-
-          button.addEventListener('click', function () {
-
-            selectedTime = time;
-
-            document.querySelectorAll('.time-button').forEach(function (btn) {
-              btn.classList.remove('selected');
-            });
-
-            button.classList.add('selected');
-
-            onTimePicked(entry);
-
-          });
-
-        }
-
-        container.appendChild(button);
-
-      });
+      renderTimes(date, result.times || [], result.noCoach);
 
     } catch (error) {
 
@@ -1923,8 +2033,9 @@
       if (result && result.success) {
 
         let sentToLine = false;
+        let noticeError = '';
 
-        // 只有 LINE 內的聊天室情境才嘗試傳送訊息
+        // 1) 先用 LIFF 從學生手機直接送出（免費，只有從 LINE 聊天室開啟才送得出去）
         if (result.notificationMessage && liff.isInClient()) {
 
           try {
@@ -1934,13 +2045,38 @@
 
           } catch (sendError) {
 
-            console.warn('sendMessages 失敗（不影響預約結果）:', sendError);
+            noticeError = sendError && sendError.message ? sendError.message : String(sendError);
+            console.warn('sendMessages 失敗，改由系統推播:', sendError);
 
           }
 
         }
 
-        renderSuccessMessage(result, sentToLine);
+        // 2) 手機送不出去（不是從聊天室開啟、沒有權限、LINE 回報錯誤）→ 由系統推播同一張卡片
+        if (!sentToLine && result.reservationId) {
+
+          try {
+
+            const notice = await callGAS('sendBookingNotice', {
+              idToken: lineIdToken,
+              reservationId: result.reservationId
+            });
+
+            if (notice && notice.success) {
+              sentToLine = true;
+            } else {
+              noticeError = (notice && notice.message) || noticeError || '通知未送出';
+            }
+
+          } catch (noticeErr) {
+
+            noticeError = noticeErr.message || noticeError;
+
+          }
+
+        }
+
+        renderSuccessMessage(result, sentToLine, noticeError);
         resetForm();
 
       } else {
@@ -1969,7 +2105,7 @@
      顯示預約成功訊息
   ================================================== */
 
-  function renderSuccessMessage(result, sentToLine) {
+  function renderSuccessMessage(result, sentToLine, noticeError) {
 
     const isPackage = result.paymentType === '課程扣堂';
 
@@ -1998,7 +2134,8 @@
         '<div class="success-notice">' +
           (sentToLine
             ? '預約確認通知已傳送至您的 LINE。'
-            : '預約已完成，期待與您見面。') +
+            : '預約已完成，期待與您見面。' +
+              (noticeError ? '<br>（LINE 通知沒有送出：' + escapeHtml(noticeError) + '。可以在聊天室輸入「我的預約」查看。）' : '')) +
           (result.coachName ? '' : '教練會由工作室為您安排，確認後會再與您聯繫。') +
         '</div>' +
 
@@ -2045,8 +2182,9 @@
     selectedDate = '';
     calendarViewDate = new Date();
 
-    // 完成預約後，強制重新查詢當月可預約日期
+    // 完成預約後，清掉快取並重新查詢當月可預約日期
     monthAvailabilityKey = '';
+    Object.keys(monthCache).forEach(function (k) { delete monthCache[k]; });
 
     renderCalendar();
     updateSelectedDateLabel();

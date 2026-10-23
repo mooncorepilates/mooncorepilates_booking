@@ -2907,10 +2907,13 @@ function renderStaffList() {
         <span class="tag ${s.active?"t-已預約":"t-已取消"}">${s.active?"啟用":"停用"}</span>
       </div>
       <div class="mute" style="margin-top:5px">帳號 ${esc(s.account)}・${esc(s.role)}・${PWTXT[s.pwState]}${s.upcoming?`・未來有 ${s.upcoming} 堂已指派`:""}</div>
-      <div class="mute" style="margin-top:3px">電子郵件：${s.email?esc(s.email):"<b>未填（不會收到通知信）</b>"}</div>
+      <div class="row" style="margin-top:10px">
+        <input class="w" type="email" data-semail="${esc(s.account)}" value="${esc(s.email||"")}" placeholder="電子郵件（有新預約、被指派時寄信通知）" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="80">
+        <button class="b sm" data-sact="saveemail" data-acc="${esc(s.account)}">儲存</button>
+      </div>
+      ${s.email?"":'<div class="mute" style="margin-top:4px">尚未填寫：這位老師不會收到通知信。</div>'}
       <div class="row" style="margin-top:10px">
         <button class="b g sm" data-sact="rename" data-acc="${esc(s.account)}">改姓名</button>
-        <button class="b g sm" data-sact="email" data-acc="${esc(s.account)}">電子郵件</button>
         ${me?"":`<button class="b g sm" data-sact="reset" data-acc="${esc(s.account)}">重設密碼</button>
         <button class="b g sm ${s.active?"d":""}" data-sact="toggle" data-acc="${esc(s.account)}">${s.active?"停用":"啟用"}</button>`}
       </div>
@@ -2966,11 +2969,12 @@ $("stlist").onclick=async e=>{
       if (v===null||!v.trim()) { b.disabled=false; return; }
       await api("renameStaff",{account:s.account,name:v.trim()});
       toast("已更新姓名");
-    } else if (b.dataset.sact==="email") {
-      const v=prompt(`「${s.name}」的電子郵件（有新預約、被指派、改期、取消時會寄信；清空＝不寄）：`,s.email||"");
-      if (v===null) { b.disabled=false; return; }
-      await api("updateStaffEmail",{account:s.account,email:v.trim()});
-      toast(v.trim()?"已更新電子郵件":"已清除電子郵件");
+    } else if (b.dataset.sact==="saveemail") {
+      const card=b.closest(".card");
+      const inp=card&&card.querySelector&&card.querySelector("input[data-semail]");
+      const v=inp?inp.value.trim():"";
+      await api("updateStaffEmail",{account:s.account,email:v});
+      toast(v?`已儲存 ${s.name} 的電子郵件`:`已清除 ${s.name} 的電子郵件`);
     } else if (b.dataset.sact==="reset") {
       const v=prompt(`為「${s.name}」設定新的初始密碼（至少 6 個字元）。\n對方原本的登入會被登出，要用這組密碼重新登入並自己改密碼。`,genPw());
       if (v===null) { b.disabled=false; return; }

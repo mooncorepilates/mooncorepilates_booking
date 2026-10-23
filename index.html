@@ -1708,6 +1708,24 @@
      呼叫 GAS API
   ================================================== */
 
+  // 背景呼叫：不等回應（預約成功後寄信給老師用），離開頁面也盡量送完
+  function callGASBackground(action, data) {
+
+    try {
+
+      fetch(CONFIG.GAS_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ action: action, data: data || {} }),
+        keepalive: true
+      }).catch(function () { /* 通知失敗不影響預約 */ });
+
+    } catch (error) {
+      // 忽略
+    }
+
+  }
+
   async function callGAS(action, data) {
 
     const response = await fetch(CONFIG.GAS_ENDPOINT, {
@@ -2075,51 +2093,17 @@
 
       if (result && result.success) {
 
-        let sentToLine = false;
-        let noticeError = '';
-
-        // 1) 先用 LIFF 從學生手機直接送出（免費，只有從 LINE 聊天室開啟才送得出去）
-        if (result.notificationMessage && liff.isInClient()) {
-
-          try {
-
-            await liff.sendMessages([result.notificationMessage]);
-            sentToLine = true;
-
-          } catch (sendError) {
-
-            noticeError = sendError && sendError.message ? sendError.message : String(sendError);
-            console.warn('sendMessages 失敗，改由系統推播:', sendError);
-
-          }
-
+        // 寄信給被指派的老師：放到背景，不讓客人等（伺服器會確認這是您自己剛建立的預約）
+        if (result.reservationId) {
+          callGASBackground('notifyCoachBooking', {
+            idToken: lineIdToken,
+            reservationId: result.reservationId
+          });
         }
 
-        // 2) 手機送不出去（不是從聊天室開啟、沒有權限、LINE 回報錯誤）→ 由系統推播同一張卡片
-        if (!sentToLine && result.reservationId) {
-
-          try {
-
-            const notice = await callGAS('sendBookingNotice', {
-              idToken: lineIdToken,
-              reservationId: result.reservationId
-            });
-
-            if (notice && notice.success) {
-              sentToLine = true;
-            } else {
-              noticeError = (notice && notice.message) || noticeError || '通知未送出';
-            }
-
-          } catch (noticeErr) {
-
-            noticeError = noticeErr.message || noticeError;
-
-          }
-
-        }
-
-        renderSuccessMessage(result, sentToLine, noticeError);
+        // 先顯示預約成功，LINE 通知在背景送出，送完再更新通知那一行
+        renderSuccessMessage(result, null, '');
+        deliverBookingNotice(result);
         resetForm();
 
       } else {
@@ -2148,6 +2132,68 @@
      顯示預約成功訊息
   ================================================== */
 
+  function noticeHtml(sentToLine, noticeError) {
+
+    if (sentToLine === null) return '預約已完成，期待與您見面。（LINE 通知傳送中…）';
+
+    return sentToLine
+      ? '預約確認通知已傳送至您的 LINE。'
+      : '預約已完成，期待與您見面。' +
+        (noticeError ? '<br>（LINE 通知沒有送出：' + escapeHtml(noticeError) + '。可以在聊天室輸入「我的預約」查看。）' : '');
+
+  }
+
+  // 把「預約成功」通知送到學生的 LINE：先用手機送（免費），送不出去再請系統推播
+  async function deliverBookingNotice(result) {
+
+    let sentToLine = false;
+    let noticeError = '';
+
+    if (result.notificationMessage && liff.isInClient()) {
+
+      try {
+
+        await liff.sendMessages([result.notificationMessage]);
+        sentToLine = true;
+
+      } catch (sendError) {
+
+        noticeError = sendError && sendError.message ? sendError.message : String(sendError);
+        console.warn('sendMessages 失敗，改由系統推播:', sendError);
+
+      }
+
+    }
+
+    if (!sentToLine && result.reservationId) {
+
+      try {
+
+        const notice = await callGAS('sendBookingNotice', {
+          idToken: lineIdToken,
+          reservationId: result.reservationId
+        });
+
+        if (notice && notice.success) {
+          sentToLine = true;
+        } else {
+          noticeError = (notice && notice.message) || noticeError || '通知未送出';
+        }
+
+      } catch (noticeErr) {
+
+        noticeError = noticeErr.message || noticeError;
+
+      }
+
+    }
+
+    const line = document.getElementById('noticeLine');
+
+    if (line) line.innerHTML = noticeHtml(sentToLine, noticeError);
+
+  }
+
   function renderSuccessMessage(result, sentToLine, noticeError) {
 
     const isPackage = result.paymentType === '課程扣堂';
@@ -2175,11 +2221,8 @@
         '</div>' +
 
         '<div class="success-notice">' +
-          (sentToLine
-            ? '預約確認通知已傳送至您的 LINE。'
-            : '預約已完成，期待與您見面。' +
-              (noticeError ? '<br>（LINE 通知沒有送出：' + escapeHtml(noticeError) + '。可以在聊天室輸入「我的預約」查看。）' : '')) +
-          (result.coachName ? '' : '教練會由工作室為您安排，確認後會再與您聯繫。') +
+          '<span id="noticeLine">' + noticeHtml(sentToLine, noticeError) + '</span>' +
+          (result.coachName ? '' : '<br>教練會由工作室為您安排，確認後會再與您聯繫。') +
         '</div>' +
 
       '</div>';

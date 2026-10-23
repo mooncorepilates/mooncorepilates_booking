@@ -530,6 +530,44 @@ button:disabled {
 }
 
 /* 提示訊息 */
+/* 改期視窗 */
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(60, 40, 28, .45);
+  padding: 0;
+}
+.modal[hidden] { display: none; }
+.modal-card {
+  width: 100%;
+  max-width: 460px;
+  max-height: 88vh;
+  overflow: auto;
+  background: var(--card);
+  border-radius: 18px 18px 0 0;
+  padding: 18px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+}
+@media (min-width: 560px) {
+  .modal { align-items: center; }
+  .modal-card { border-radius: 18px; }
+}
+.modal-title { font-size: 17px; font-weight: 800; margin-bottom: 4px; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.chip {
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.chip.on { background: var(--ink); border-color: var(--ink); color: var(--card); }
+.chip:disabled { opacity: .4; cursor: not-allowed; }
+
 #toast {
   position: fixed;
   left: 50%;
@@ -940,6 +978,10 @@ input[data-l5] {
       </div>
 
       <div class="row" style="margin-top:10px">
+        <input id="nsEmail" class="w" type="email" placeholder="電子郵件（選填，有新預約或被指派時會寄信通知）" autocapitalize="none" autocomplete="off" spellcheck="false" maxlength="80">
+      </div>
+
+      <div class="row" style="margin-top:10px">
         <select id="nsRole">
           <option>員工</option>
           <option>管理員</option>
@@ -1019,6 +1061,17 @@ input[data-l5] {
 </div>
 
 <div id="toast" hidden></div>
+
+<div class="modal" id="rsModal" hidden>
+  <div class="modal-card">
+    <div class="modal-title" id="rsTitle"></div>
+    <div id="rsBody"></div>
+    <div class="row" style="margin-top:16px">
+      <button class="b" id="rsOk">確認改期</button>
+      <button class="b g" id="rsCancel">取消</button>
+    </div>
+  </div>
+</div>
 </main>
 
 <script>
@@ -1487,32 +1540,142 @@ function jointRow(b,id,st) {
   return html;
 }
 
-async function rescheduleUI(id,date,time,force,notify) {
-  if (notify===undefined) notify=true;
-  const bk=S.bookings.find(x=>String(x["預約編號"])===id);
-  if (!bk) return;
+// ===== 改期視窗 =====
+// 管理員：可以選任何有營業的日期與時段，並選「誰上課」（顯示誰在那個時段有空）。
+// 員工：只能選自己有標示有空、教室也有空的時間（由伺服器算好選項，也由伺服器把關）。
+let RS=null;
 
-  if (date===undefined) {
-    date=prompt(`改期：${bk["姓名"]}（目前 ${bk["日期"]} ${bk["時間"]}）\n請輸入新的日期（例如 2026-11-05）：`,bk["日期"]);
-    if (date===null) return;
-    time=prompt("請輸入新的時間（例如 14:00）：",bk["時間"]);
-    if (time===null) return;
+function rsCloseModal() { $("rsModal").hidden=true; RS=null; }
+
+function rsSlotsOf(date) {
+  const h=S.hours.find(x=>x.date===date);
+  return h&&h.slots?h.slots.split(",").filter(Boolean):[];
+}
+
+function rsStaffFree(acct,date,time) {
+  return (S.avail||[]).some(a=>a.date===date&&sameAcct(a.account,acct)&&String(a.slots).split(",").includes(time));
+}
+
+function rsRender() {
+  const r=RS;
+  if (!r) return;
+
+  const body=[];
+
+  if (r.mode==="staff") {
+    const dates=r.options.map(o=>o.date);
+    body.push(`<label>日期（只列出你有標示有空的日子）</label>
+      <select id="rsDate">${dates.map(d=>`<option value="${d}" ${d===r.date?"selected":""}>${md(d)}</option>`).join("")}</select>`);
+    const times=(r.options.find(o=>o.date===r.date)||{times:[]}).times;
+    body.push(`<label style="margin-top:12px">時間</label>
+      <div class="chips">${times.map(t=>`<button type="button" class="chip ${t===r.time?"on":""}" data-rstime="${t}">${t}</button>`).join("")}</div>`);
+    body.push(`<p class="mute" style="margin:12px 0 0">只能改到你有標示有空、而且教室也有空的時間。想改到別的時間，請先到「我的空檔」標示，或請管理員處理。</p>`);
+  } else {
+    const dates=S.hours.filter(h=>h.slots&&h.date>=today()).map(h=>h.date).sort();
+    body.push(`<label>日期（有營業的日子）</label>
+      <select id="rsDate">${dates.map(d=>`<option value="${d}" ${d===r.date?"selected":""}>${md(d)}</option>`).join("")}</select>`);
+    const slots=rsSlotsOf(r.date);
+    body.push(`<label style="margin-top:12px">時間</label>
+      <div class="chips">${slots.map(t=>`<button type="button" class="chip ${t===r.time?"on":""}" data-rstime="${t}">${t}</button>`).join("")||'<span class="mute">這天沒有營業時段</span>'}</div>`);
+    const staff=(S.staff||[]).filter(s=>s.active);
+    const keep=r.cur.coachAcc?`不變（${esc(r.cur.coach||r.cur.coachAcc)}）`:"不指派老師";
+    body.push(`<label style="margin-top:12px">誰上課</label>
+      <select id="rsCoach">
+        <option value="__keep" ${r.coach==="__keep"?"selected":""}>${keep}</option>
+        <option value="" ${r.coach===""?"selected":""}>改為不指派</option>
+        ${staff.map(s=>{
+          const free=r.time?rsStaffFree(s.account,r.date,r.time):null;
+          const tag=free===null?"":(free?"　✓ 有空":"　✗ 沒標示有空");
+          return `<option value="${esc(s.account)}" ${r.coach===s.account?"selected":""}>${esc(s.name)}${tag}</option>`;
+        }).join("")}
+      </select>
+      <p class="mute" style="margin:8px 0 0">先選好日期與時間，下拉選單會顯示誰在那個時段有空。選沒空的老師時，送出前會再問你要不要確定。</p>`);
   }
 
-  try {
-    const r=await api("rescheduleBooking",{id,date:date.trim(),time:time.trim(),force:!!force,notify});
+  $("rsBody").innerHTML=body.join("");
+}
 
-    if (r.needConfirm) {
-      if (confirm(r.message+"\n\n仍要改期嗎？")) return rescheduleUI(id,date,time,true,notify);
-      return;
+async function openReschedule(mode,id,notify) {
+  const x=mode==="staff"?(ST.assigned||[]).find(v=>String(v.id)===id):S.bookings.find(v=>String(v["預約編號"])===id);
+  if (!x) return;
+
+  RS={mode,id,notify,date:"",time:"",coach:"__keep",options:[],
+      cur:mode==="staff"
+        ?{date:x.date,time:x.time,name:x.name}
+        :{date:x["日期"],time:x["時間"],name:x["姓名"],coach:x["教練"],coachAcc:x["教練帳號"]}};
+
+  if (mode==="staff") {
+    try {
+      const r=await api("staffRescheduleOptions",{id});
+      RS.options=r.options;
+    } catch(err) { RS=null; return toast(err.message); }
+
+    if (!RS.options.length) {
+      RS=null;
+      return toast("目前沒有可以改期的時間。請先到「我的空檔」標示有空，或請管理員處理。");
     }
 
-    await load();
-    toast(`已改期到 ${r.date} ${r.time}${notifyTail(r,notify)}`);
+    RS.date=RS.options[0].date;
+  } else {
+    const dates=S.hours.filter(h=>h.slots&&h.date>=today()).map(h=>h.date).sort();
+    if (!dates.length) { RS=null; return toast("目前沒有設定營業時間的日子，請先到「營業時間」設定。"); }
+    RS.date=dates.includes(RS.cur.date)?RS.cur.date:dates[0];
+  }
+
+  $("rsTitle").textContent=`改期：${RS.cur.name}（目前 ${RS.cur.date} ${RS.cur.time}）`;
+  rsRender();
+  $("rsModal").hidden=false;
+}
+
+$("rsBody").onchange=e=>{
+  if (!RS) return;
+  if (e.target.id==="rsDate") { RS.date=e.target.value; RS.time=""; rsRender(); }
+  if (e.target.id==="rsCoach") RS.coach=e.target.value;
+};
+$("rsBody").onclick=e=>{
+  const c=e.target.closest("button[data-rstime]");
+  if (!c||!RS) return;
+  RS.time=c.dataset.rstime;
+  rsRender();
+};
+$("rsCancel").onclick=rsCloseModal;
+$("rsModal").onclick=e=>{ if (e.target.id==="rsModal") rsCloseModal(); };
+
+async function rsSubmit(force) {
+  if (!RS) return;
+  if (!RS.time) return toast("請選擇新的時間");
+
+  const r=RS;
+  const btn=$("rsOk");
+  btn.disabled=true;
+
+  try {
+    let res;
+
+    if (r.mode==="staff") {
+      res=await api("staffReschedule",{id:r.id,date:r.date,time:r.time,notify:r.notify});
+    } else {
+      const body={id:r.id,date:r.date,time:r.time,force:!!force,notify:r.notify};
+      if (r.coach!=="__keep") body.coach=r.coach;
+      res=await api("rescheduleBooking",body);
+
+      if (res.needConfirm) {
+        btn.disabled=false;
+        if (confirm(res.message+"\n\n仍要改期嗎？")) return rsSubmit(true);
+        return;
+      }
+    }
+
+    rsCloseModal();
+    if (r.mode==="staff") await loadStaff(); else await load();
+    toast(`已改期到 ${res.date} ${res.time}${res.coach&&r.mode!=="staff"?"・"+res.coach:""}${notifyTail(res,r.notify)}`);
   } catch(err) {
     toast(err.message);
   }
+
+  btn.disabled=false;
 }
+$("rsOk").onclick=()=>rsSubmit(false);
 
 async function convertUI(id,notify) {
   if (notify===undefined) notify=true;
@@ -1606,7 +1769,8 @@ function bkCard(b) {
       <span class="tag t-${esc(st)}">${esc(st)}</span>
     </div>
     <div>${esc(b["姓名"])}・<a href="tel:${esc(fixPhone(b["電話"]))}">${esc(fixPhone(b["電話"]))}</a></div>
-    <div class="mute">${pack?"課程扣 1 堂":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
+    <div class="mute">${pack?"使用課程（已保留 1 堂）":"$"+esc(b["價格"])}${left}${b["訂金後五碼"]?"　後五碼 "+esc(b["訂金後五碼"]):""}${b["備註"]?"　備註："+esc(b["備註"]):""}</div>
+    ${b["學生備註"]?`<div class="mute" style="margin-top:4px;white-space:pre-wrap">學生備註：${esc(b["學生備註"])}</div>`:""}
     ${b["系統備註"]?`<div class="sysnote">${esc(b["系統備註"])}</div>`:""}
     <label class="mute" style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:10px">
       <input type="checkbox" data-notify="${id}" ${notifyDefault()?"checked":""}> 操作時 LINE 通知學生（確認、完成、取消、改期、指派教練、補差額）
@@ -1780,7 +1944,7 @@ $("bview").onclick=async e=>{
 
   const act=b.dataset.act, id=b.dataset.id;
 
-  if (act==="resched") return rescheduleUI(id,undefined,undefined,false,notifyOf(b));
+  if (act==="resched") return openReschedule("admin",id,notifyOf(b));
   if (act==="convert") return convertUI(id,notifyOf(b));
   if (act==="duepay") return dueUI(id,notifyOf(b));
 
@@ -1789,7 +1953,7 @@ $("bview").onclick=async e=>{
   const bk=S.bookings.find(x=>String(x["預約編號"])===id);
   const pack=(+bk["扣抵"]||0)>0;
 
-  if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆是課程扣堂，會退回 1 堂。":""}`)) return;
+  if (act==="no" && !confirm(`確定取消 ${bk["姓名"]} ${bk["日期"]} ${bk["時間"]} 的預約？${pack?"\n這筆使用課程，已保留的 1 堂會退回。":""}`)) return;
   // 這張卡片上「LINE 通知學生」的勾選
   const holder=b.closest&&b.closest(".bk");
   const cb=holder&&holder.querySelector&&holder.querySelector("input[data-notify]");
@@ -2743,8 +2907,10 @@ function renderStaffList() {
         <span class="tag ${s.active?"t-已預約":"t-已取消"}">${s.active?"啟用":"停用"}</span>
       </div>
       <div class="mute" style="margin-top:5px">帳號 ${esc(s.account)}・${esc(s.role)}・${PWTXT[s.pwState]}${s.upcoming?`・未來有 ${s.upcoming} 堂已指派`:""}</div>
+      <div class="mute" style="margin-top:3px">電子郵件：${s.email?esc(s.email):"<b>未填（不會收到通知信）</b>"}</div>
       <div class="row" style="margin-top:10px">
         <button class="b g sm" data-sact="rename" data-acc="${esc(s.account)}">改姓名</button>
+        <button class="b g sm" data-sact="email" data-acc="${esc(s.account)}">電子郵件</button>
         ${me?"":`<button class="b g sm" data-sact="reset" data-acc="${esc(s.account)}">重設密碼</button>
         <button class="b g sm ${s.active?"d":""}" data-sact="toggle" data-acc="${esc(s.account)}">${s.active?"停用":"啟用"}</button>`}
       </div>
@@ -2772,9 +2938,9 @@ $("nsAdd").onclick=async()=>{
   b.disabled=true;
 
   try {
-    await api("addStaff",{account,name,role,initPw});
+    await api("addStaff",{account,name,role,initPw,email:$("nsEmail").value.trim()});
     showCreds(name,account,initPw,false);
-    ["nsAcc","nsName","nsPw"].forEach(id=>$(id).value="");
+    ["nsAcc","nsName","nsPw","nsEmail"].forEach(id=>$(id).value="");
     const j=await api("listStaff");
     STF=j.staff;
     renderStaffList();
@@ -2800,6 +2966,11 @@ $("stlist").onclick=async e=>{
       if (v===null||!v.trim()) { b.disabled=false; return; }
       await api("renameStaff",{account:s.account,name:v.trim()});
       toast("已更新姓名");
+    } else if (b.dataset.sact==="email") {
+      const v=prompt(`「${s.name}」的電子郵件（有新預約、被指派、改期、取消時會寄信；清空＝不寄）：`,s.email||"");
+      if (v===null) { b.disabled=false; return; }
+      await api("updateStaffEmail",{account:s.account,email:v.trim()});
+      toast(v.trim()?"已更新電子郵件":"已清除電子郵件");
     } else if (b.dataset.sact==="reset") {
       const v=prompt(`為「${s.name}」設定新的初始密碼（至少 6 個字元）。\n對方原本的登入會被登出，要用這組密碼重新登入並自己改密碼。`,genPw());
       if (v===null) { b.disabled=false; return; }
@@ -2923,6 +3094,7 @@ function jobCard(x) {
       <span class="tag t-${esc(x.status)}">${esc(x.status)}</span>
     </div>
     <div>${esc(x.name)}${x.room?"・"+esc(x.room):""}</div>
+    ${x.studentNote?`<div class="pk" style="white-space:pre-wrap"><b>學生備註</b>　${esc(x.studentNote)}</div>`:""}
     ${joint?`<div class="pk"><b>參與者</b>${x.parts.map(p=>`<div class="row sp" style="margin:6px 0"><span>${esc(p.name)}<span class="mute">（${esc(p.role)}）</span></span>
         <select data-jatt="${esc(x.id)}" data-key="${esc(p.key)}" ${active?"":"disabled"}>
           <option ${p.attendance!=="請假"?"selected":""}>待上課</option><option ${p.attendance==="請假"?"selected":""}>請假</option>
@@ -3005,17 +3177,11 @@ $("jlist").onclick=async e=>{
   const cb=holder&&holder.querySelector&&holder.querySelector("input[data-jnotify]");
   const notify=cb?cb.checked:true;
 
-  if (act==="resched") {
-    const date=prompt(`改期：${x.name}（目前 ${x.date} ${x.time}）\n請輸入新的日期（例如 2026-11-05）：`,x.date);
-    if (date===null) return;
-    const time=prompt("請輸入新的時間（例如 14:00）：",x.time);
-    if (time===null) return;
-    return staffActUI("resched",id,notify,{date:date.trim(),time:time.trim()});
-  }
+  if (act==="resched") return openReschedule("staff",id,notify);
 
   const ask={
     done:`${x.name} ${x.date} ${x.time} 的課已經上完了？\n${notify?"會 LINE 通知學生本堂完成與剩餘堂數。":"不會 LINE 通知學生。"}`,
-    cancel:`確定取消 ${x.name} ${x.date} ${x.time} 的課？\n課程扣堂的會退回 1 堂。${notify?"會 LINE 通知學生。":""}`,
+    cancel:`確定取消 ${x.name} ${x.date} ${x.time} 的課？\n使用課程的，已保留的 1 堂會退回。${notify?"會 LINE 通知學生。":""}`,
     undo:`把 ${x.name} ${x.date} ${x.time} 改回「已預約」？\n已扣的堂數會補回並重新保留。`
   }[act];
 

@@ -201,6 +201,32 @@
       box-shadow: 0 0 0 3px rgba(111, 78, 55, 0.15);
     }
 
+    textarea {
+      display: block;
+      width: 100%;
+      min-height: 110px;
+      padding: 12px 14px;
+      border: 1px solid #DCC9AE;
+      border-radius: 10px;
+      background: #FFFFFF;
+      font-family: inherit;
+      font-size: 16px;
+      line-height: 1.6;
+      color: #4A3B30;
+      outline: none;
+      resize: vertical;
+    }
+
+    textarea:focus {
+      border-color: #6F4E37;
+      background: #FFFCF7;
+      box-shadow: 0 0 0 3px rgba(111, 78, 55, 0.15);
+    }
+
+    textarea::placeholder {
+      color: #B8A99A;
+    }
+
     input::placeholder {
       color: #B8A99A;
     }
@@ -869,6 +895,21 @@
 
     </div>
 
+    <div class="form-group" id="noteGroup">
+
+      <label for="studentNote">
+        想請教練特別注意或幫您改善的地方？（選填）
+      </label>
+
+      <textarea
+        id="studentNote"
+        rows="4"
+        maxlength="300"
+        placeholder="例：最近常腰痠、想改善駝背、生理期中、膝蓋曾受過傷…等，都可以寫在這裡喔！"
+      ></textarea>
+
+    </div>
+
     <button id="submitButton" class="submit" type="button">
       確認預約
     </button>
@@ -902,10 +943,11 @@
     '體驗課僅限首次預約（新生限定），每人限體驗一次，每堂 60 分鐘，教練由工作室為您安排。後續預約請選擇正式課程。';
 
   const NOTE_FORMAL =
-    '正式課程不區分器械種類，由老師依個人需求安排核心床、凱迪拉克及其他器械，使用凱迪拉克不另加價。';
+    '正式課程不區分器械種類，由老師依個人需求安排核心床、凱迪拉克及其他器械，使用凱迪拉克不另加價。' +
+    '本工作室沒有儲值金，僅提供包堂方案。';
 
   const NOTE_PACKAGE =
-    '您有課程：預約時會自動扣 1 堂，只會顯示專屬教練有空的時段；同一時段有兩位教練都有空時，可以自己選擇。';
+    '您有課程：預約時會先為您保留 1 堂，上完課才會正式扣除；只會顯示專屬教練有空的時段，同一時段有兩位教練都有空時，可以自己選擇。';
 
   const NOTE_JOINT =
     '一對二課程需要兩位同行夥伴「共同預約」：兩位都要有一對二課程，預約時各保留 1 堂，教練由工作室安排。' +
@@ -1153,7 +1195,7 @@
 
   }
 
-  // 有課程 → 顯示「課程扣 1 堂」；沒有 → 顯示單堂價格
+  // 有課程 → 顯示「使用課程」（上完課才扣）；沒有 → 顯示單堂價格
   function updateServiceLabels() {
 
     const options = $('service').querySelectorAll('optgroup:not([data-trial]) option');
@@ -1166,7 +1208,7 @@
 
         // 一對二：必須使用一對二課程（兩位都要有），不提供單堂線上預約
         o.textContent = ME.hasTwo
-          ? base + '｜課程各扣 1 堂（需兩位都有一對二課程）'
+          ? base + '｜使用課程（各保留 1 堂，需兩位都有一對二課程）'
           : base + '｜需要一對二課程';
         o.disabled = !ME.hasTwo;
 
@@ -1175,7 +1217,7 @@
       }
 
       o.textContent = ME.hasPackage
-        ? base + '｜課程扣 1 堂（剩 ' + ME.credits + ' 堂）'
+        ? base + '｜使用課程（剩 ' + ME.credits + ' 堂，上完課才扣）'
         : base + '｜單堂 ' + formatMoney(o.dataset.price);
 
     });
@@ -1964,6 +2006,7 @@
     const phone = $('phone').value.trim();
     const partnerName = $('partnerName').value.trim();
     const partnerPhone = $('partnerPhone').value.trim();
+    const studentNote = $('studentNote').value.trim();
 
     if (!liffReady || !lineUserId) {
       alert('LINE 尚未連線，請從 LINE 官方帳號開啟預約。');
@@ -2008,6 +2051,7 @@
         phone: phone,
         partnerName: service.indexOf(TWO_PERSON_KEYWORD) !== -1 ? partnerName : '',
         partnerPhone: isJointService(service) ? partnerPhone : '',
+        studentNote: studentNote,
         coachAccount: selectedCoach,
 
         // 後端使用 idToken 向 LINE 官方驗證身分
@@ -2109,7 +2153,7 @@
     const isPackage = result.paymentType === '課程扣堂';
 
     const fee = isPackage
-      ? '課程扣 1 堂（剩餘 ' + (result.remainingSessions || 0) + ' 堂）'
+      ? '使用課程：已保留 1 堂，上完課才正式扣除（可預約剩餘 ' + (result.remainingSessions || 0) + ' 堂）'
       : formatMoney(result.price || 0);
 
     $('message').innerHTML =
@@ -2195,6 +2239,7 @@
     if (!$('phone').readOnly) $('phone').value = '';
     $('partnerName').value = '';
     $('partnerPhone').value = '';
+    $('studentNote').value = '';
 
     hideCoachChoices();
 

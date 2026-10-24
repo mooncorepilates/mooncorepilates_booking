@@ -863,7 +863,7 @@
       >
 
       <div id="idHint" class="service-note" hidden>
-        已帶入您的會員資料；如需修改姓名或電話，請與工作室聯繫。
+        已帶入您的會員資料；如需修改姓名或電話，請與教室聯繫。
       </div>
 
     </div>
@@ -940,21 +940,21 @@
   const TWO_PERSON_KEYWORD = '一對二';
 
   const NOTE_TRIAL =
-    '體驗課僅限首次預約（新生限定），每人限體驗一次，每堂 60 分鐘，教練由工作室為您安排。後續預約請選擇正式課程。';
+    '體驗課僅限首次預約（新生限定），每人限體驗一次，每堂 60 分鐘，教練由教室為您安排。後續預約請選擇正式課程。';
 
   const NOTE_FORMAL =
     '正式課程不區分器械種類，由老師依個人需求安排核心床、凱迪拉克及其他器械，使用凱迪拉克不另加價。' +
-    '本工作室沒有儲值金，僅提供包堂方案。';
+    '本教室沒有儲值金，僅提供包堂方案。';
 
   const NOTE_PACKAGE =
     '您有課程：預約時會先為您保留 1 堂，上完課才會正式扣除；只會顯示專屬教練有空的時段，同一時段有兩位教練都有空時，可以自己選擇。';
 
   const NOTE_JOINT =
-    '一對二課程需要兩位同行夥伴「共同預約」：兩位都要有一對二課程，預約時各保留 1 堂，教練由工作室安排。' +
-    '如果其中一位臨時請假，請與工作室聯繫：可以兩人一起改期，或改成一對一並補差額。';
+    '一對二課程需要兩位同行夥伴「共同預約」：兩位都要有一對二課程，預約時各保留 1 堂，教練由教室安排。' +
+    '如果其中一位臨時請假，請與教室聯繫：可以兩人一起改期，或改成一對一並補差額。';
 
   const NOTE_SINGLE =
-    '目前沒有可用的課程，將以單堂價格預約，教練由工作室為您安排。想購買課程請與工作室聯繫。';
+    '目前沒有可用的課程，將以單堂價格預約，教練由教室為您安排。想購買課程請與教室聯繫。';
 
   let selectedTime = '';
   let selectedDate = '';
@@ -1253,7 +1253,7 @@
     box.textContent = ME.coaches.length
       ? '您有課程，剩餘 ' + ME.credits + ' 堂。專屬教練：' +
         ME.coaches.map(function (c) { return c.name; }).join('、') + '。'
-      : '您有課程（剩餘 ' + ME.credits + ' 堂），但還沒有指定專屬教練，暫時無法線上預約，請與工作室聯繫。';
+      : '您有課程（剩餘 ' + ME.credits + ' 堂），但還沒有指定專屬教練，暫時無法線上預約，請與教室聯繫。';
 
   }
 
@@ -1824,7 +1824,7 @@
 
     if (noCoach) {
       container.innerHTML =
-        '<div class="no-time">您的課程還沒有指定專屬教練，請與工作室聯繫。</div>';
+        '<div class="no-time">您的課程還沒有指定專屬教練，請與教室聯繫。</div>';
       return;
     }
 
@@ -2139,7 +2139,7 @@
     return sentToLine
       ? '預約確認通知已傳送至您的 LINE。'
       : '預約已完成，期待與您見面。' +
-        (noticeError ? '<br>（LINE 通知沒有送出：' + escapeHtml(noticeError) + '。可以在聊天室輸入「我的預約」查看。）' : '');
+        (noticeError ? '<br>（LINE 通知沒有送出：' + escapeHtml(noticeError) + '。可以在聊天室輸入「會員專區」查看。）' : '');
 
   }
 
@@ -2222,7 +2222,7 @@
 
         '<div class="success-notice">' +
           '<span id="noticeLine">' + noticeHtml(sentToLine, noticeError) + '</span>' +
-          (result.coachName ? '' : '<br>教練會由工作室為您安排，確認後會再與您聯繫。') +
+          (result.coachName ? '' : '<br>教練會由教室為您安排，確認後會再與您聯繫。') +
         '</div>' +
 
       '</div>';

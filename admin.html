@@ -1065,6 +1065,10 @@ input[data-l5] {
   </section>
 
   <section id="p-mypay" hidden>
+    <div class="card" id="mpPick" hidden>
+      <label class="mute">以員工身分預覽（開發者）</label>
+      <select id="mpStaff" style="width:100%;margin-top:6px"></select>
+    </div>
     <div class="card" id="mpProg"></div>
     <div id="mpList"></div>
   </section>
@@ -1249,7 +1253,7 @@ function applyRole() {
   const tabs = (ROLE_TABS[ROLE] || ROLE_TABS.boss).slice();
   // 薪資：結算／檢視權限看「薪資結算」，有員工帳號的人（含店長）看「我的薪資」
   if (PAYACC==="settle" || PAYACC==="view") tabs.push("payroll");
-  if (MYACC) tabs.push("mypay");
+  if (MYACC || ROLE==="master") tabs.push("mypay");   // 萬用密碼可切換員工預覽
   document.querySelectorAll("#tabs .pill").forEach(p=>{
     p.hidden = !tabs.includes(p.dataset.t);
   });
@@ -3421,6 +3425,7 @@ function renderPayroll() {
 }
 
 $("pyMonth").onchange = ()=>loadPayroll();
+$("mpStaff").onchange = ()=>loadMyPay();
 $("pyCalc").onclick = ()=>{
   if (confirm(`重新計算 ${PY.month} 的薪資？\n會從預約、收款紀錄重新抓資料，覆蓋這個月的預覽。`)) loadPayroll("payrollPreview");
 };
@@ -3466,9 +3471,20 @@ $("p-payroll").addEventListener("click", async e=>{
 });
 
 async function loadMyPay() {
+  const master = ROLE==="master";
+  $("mpPick").hidden = !master;
+  if (master && !$("mpStaff").options.length) {
+    $("mpStaff").innerHTML = '<option value="">選擇員工</option>'+(S.staff||[]).map(s=>`<option value="${esc(s.account)}">${esc(s.name)}（${esc(s.account)}）</option>`).join("");
+  }
+  const staffId = master ? $("mpStaff").value : "";
+  if (master && !staffId) {
+    $("mpProg").innerHTML = '<p class="mute" style="margin:0">選擇一位員工，看他在「我的薪資」看到的內容。</p>';
+    $("mpList").innerHTML = "";
+    return;
+  }
   $("mpProg").innerHTML = '<p class="mute" style="margin:0">讀取中…</p>';
   try {
-    const [p,s] = await Promise.all([api("myPayProgress",{month:pyThisMonth()}), api("myPayslips")]);
+    const [p,s] = await Promise.all([api("myPayProgress",{month:pyThisMonth(),staffId}), api("myPayslips",{staffId})]);
     const nt = p.nextOneTier, nc = p.nextCountBonus;
     $("mpProg").innerHTML = `<b>${mLabel(p.month)} 目前累積</b>
       <div class="py-grid" style="margin-top:8px">${[["一對一",p.one+" 堂"],["一對二",p.pair+" 堂"],["體驗課",p.trials+" 堂"]].map(([a,b])=>`<div class="py-kpi"><span class="mute">${a}</span><b>${b}</b></div>`).join("")}</div>

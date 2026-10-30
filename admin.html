@@ -2952,6 +2952,7 @@ async function loadStaffList() {
   try {
     const j=await api("listStaff");
     STF=j.staff;
+    await loadPaySet();
     renderStaffList();
   } catch(e) {
     toast(e.message);
@@ -2980,6 +2981,7 @@ function renderStaffList() {
         ${me?"":`<button class="b g sm" data-sact="reset" data-acc="${esc(s.account)}">重設密碼</button>
         <button class="b g sm ${s.active?"d":""}" data-sact="toggle" data-acc="${esc(s.account)}">${s.active?"停用":"啟用"}</button>`}
       </div>
+      ${payBox(s)}
     </div>`;
   }).join(""):'<div class="card"><p class="mute none">還沒有員工帳號，請從上方新增。</p></div>';
 }
@@ -3024,6 +3026,29 @@ $("stlist").onclick=async e=>{
 
   const s=STF.find(x=>x.account===b.dataset.acc);
   if (!s) return;
+
+  // 薪資設定：展開／儲存
+  if (b.dataset.sact==="paytoggle") {
+    const k=String(s.account).toLowerCase();
+    PSOPEN.has(k)?PSOPEN.delete(k):PSOPEN.add(k);
+    return renderStaffList();
+  }
+  if (b.dataset.sact==="paysave") {
+    const data={};
+    b.closest(".card").querySelectorAll("[data-paybox] [data-p]").forEach(el=>data[el.dataset.p]=el.value.trim());
+    b.disabled=true;
+    try {
+      await api("payrollStaffSave",{account:s.account,data});
+      await loadPaySet();
+      PSOPEN.delete(String(s.account).toLowerCase());
+      renderStaffList();
+      toast(`已儲存 ${s.name} 的薪資設定`);
+    } catch(err) {
+      toast(err.message);
+      b.disabled=false;
+    }
+    return;
+  }
 
   b.disabled=true;
   try {
@@ -3507,6 +3532,67 @@ async function loadMyPay() {
     $("mpList").innerHTML = "";
   }
 }
+
+/* ---------- 員工分頁：薪資設定（存在薪資試算表 B） ---------- */
+let PSET = null;                 // {staff:{帳號:{…}}, access:{帳號:權限}}；沒有權限時為 null
+const PSOPEN = new Set();
+const PS_DEF = {店長:{抽成啟用:"是",堂數獎金啟用:"是"},正職:{抽成啟用:"是",堂數獎金啟用:"是"},兼職:{抽成啟用:"否",堂數獎金啟用:"否"}};
+
+async function loadPaySet() {
+  PSET = null;
+  if (PAYACC!=="settle" && PAYACC!=="view") return;
+  try { PSET = await api("payrollStaffList"); } catch(e) { toast("薪資設定讀取失敗："+e.message); }
+}
+
+function payBox(s) {
+  if (!PSET) return "";
+  const k = String(s.account).toLowerCase(), p = PSET.staff[k]||{}, lv = PSET.access[k]||"";
+  const role = p["身份"]||"", edit = PAYACC==="settle", open = PSOPEN.has(k);
+  const sumTxt = role
+    ? `${role}${p["狀態"]==="離職"?"・已離職":""}${role==="兼職"?`・一對一 $${p["兼職一對一單價"]||0}／一對二 $${p["兼職一對二單價"]||0}`:""}${lv?`・薪資${lv}`:""}`
+    : "尚未設定（不會計薪）";
+  const head = `<div class="row sp" style="margin-top:10px"><span class="mute">薪資：<b style="color:${role?"var(--ink)":"var(--bad)"}">${esc(sumTxt)}</b></span>
+    <button class="b g sm" data-sact="paytoggle" data-acc="${esc(s.account)}">${open?"收合":(edit?"薪資設定":"查看薪資設定")}</button></div>`;
+  if (!open) return head;
+
+  const dis = edit?"":"disabled";
+  const sel = (f,opts)=>`<select data-p="${f}" style="width:100%" ${dis}>${opts.map(([v,t])=>`<option value="${v}" ${String(p[f]??"")===v?"selected":""}>${t}</option>`).join("")}</select>`;
+  const inp = (f,type,ph="")=>`<input data-p="${f}" type="${type}" ${type==="number"?'min="0"':""} value="${esc(p[f]??"")}" placeholder="${ph}" style="width:100%" ${dis}>`;
+  const cell = (label,html,w=130)=>`<div style="flex:1 1 ${w}px"><label>${label}</label>${html}</div>`;
+  const pt = role==="兼職";
+
+  return head + `<div class="mbox" data-paybox="${esc(s.account)}">
+    <div class="row">
+      ${cell("身份",sel("身份",[["","未設定"],["店長","店長"],["正職","正職"],["兼職","兼職"]]))}
+      ${cell("狀態",sel("狀態",[["在職","在職"],["離職","離職"]]))}
+      ${cell("到職日",inp("到職日","date"),150)}
+      ${cell("離職日",inp("離職日","date"),150)}
+    </div>
+    <div class="row">
+      ${cell("底薪覆寫",inp("底薪覆寫","number","空白＝依身份預設"),150)}
+      ${cell("兼職一對一每堂",inp("兼職一對一單價","number",pt?"必填 650–900":"兼職才需要"),150)}
+      ${cell("兼職一對二每堂",inp("兼職一對二單價","number",pt?"必填 850–1,000":"兼職才需要"),150)}
+    </div>
+    <div class="row">
+      ${cell("銷售抽成",sel("抽成啟用",[["是","啟用"],["否","關閉"]]))}
+      ${cell("抽成方式",sel("抽成方式",[["全額級距","全額級距"],["超額累進","超額累進"]]))}
+      ${cell("堂數獎金",sel("堂數獎金啟用",[["是","啟用"],["否","關閉"]]))}
+      ${edit?cell("薪資權限",`<select data-p="薪資權限" style="width:100%"><option value="" ${lv?"":"selected"}>只看自己</option><option value="檢視" ${lv==="檢視"?"selected":""}>檢視全部（店長）</option><option value="結算" ${lv==="結算"?"selected":""}>結算</option></select>`,150):""}
+    </div>
+    ${cell("備註",inp("備註","text"),260)}
+    ${edit?`<button class="b sm" style="margin-top:12px" data-sact="paysave" data-acc="${esc(s.account)}">儲存薪資設定</button>
+    <p class="mute" style="margin:8px 0 0">已鎖定的月份不受影響；尚未鎖定的月份請到「薪資結算」重新計算。</p>`:""}
+  </div>`;
+}
+
+// 改身份時，帶入該身份常用的抽成／堂數獎金預設
+$("stlist").addEventListener("change", e=>{
+  const sel = e.target.closest('select[data-p="身份"]');
+  if (!sel) return;
+  const box = sel.closest("[data-paybox]"), d = PS_DEF[sel.value];
+  if (!box || !d) return;
+  Object.keys(d).forEach(f=>{ const el = box.querySelector(`[data-p="${f}"]`); if (el) el.value = d[f]; });
+});
 </script>
 </body>
 </html>

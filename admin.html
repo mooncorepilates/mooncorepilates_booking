@@ -137,6 +137,14 @@ h1 {
   display: none;
 }
 
+/* 電腦（滑鼠）：分頁太多時換行顯示，不用橫向捲動 */
+@media (hover: hover) and (pointer: fine) {
+  .pills {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
 .pill {
   flex: 0 0 auto;
   padding: 10px 17px;
@@ -1478,6 +1486,8 @@ function setTab(t) {
   tab = t;
   document.querySelectorAll("#tabs .pill").forEach(x=>{
     x.classList.toggle("on",x.dataset.t===t);
+    // 手機橫向捲動時，把目前的分頁捲進畫面
+    if (x.dataset.t===t && !x.hidden) x.scrollIntoView({block:"nearest",inline:"nearest"});
   });
   ["bookings","hours","rentals","services","members","staff","settings","myfree","myjobs","payroll","mypay"].forEach(k=>{
     $("p-"+k).hidden = k!==t;

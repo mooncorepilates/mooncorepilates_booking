@@ -737,6 +737,18 @@ input[data-l5] {
     align-items: flex-start;
   }
 }
+
+/* 薪資 */
+.py-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+.py-kpi { background: var(--pill); border-radius: 12px; padding: 10px 12px; }
+.py-kpi b { display: block; font-size: 18px; color: var(--ink); margin-top: 2px; }
+.py-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.py-tbl td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.py-tbl td:last-child { text-align: right; white-space: nowrap; color: var(--ink); }
+.py-tbl tr.tot td { font-weight: 700; color: var(--ink); }
+.py-warn { color: var(--warn); font-size: 13px; line-height: 1.7; margin-top: 6px; }
+.py-tag { display: inline-block; font-size: 12px; padding: 2px 10px; border-radius: 99px; background: var(--pill); color: var(--ink); }
+.py-tag.lock { background: var(--ok); color: var(--card); }
 </style>
 </head>
 
@@ -813,6 +825,8 @@ input[data-l5] {
     <button class="pill" data-t="staff">員工</button>
     <button class="pill" data-t="myfree" hidden>我的空檔</button>
     <button class="pill" data-t="myjobs" hidden>我的課表</button>
+    <button class="pill" data-t="payroll" hidden>薪資結算</button>
+    <button class="pill" data-t="mypay" hidden>我的薪資</button>
     <button class="pill" data-t="settings" id="tabSettings" hidden>系統設定</button>
   </div>
 
@@ -1032,6 +1046,29 @@ input[data-l5] {
     <div class="card" id="jlist"></div>
   </section>
 
+  <section id="p-payroll" hidden>
+    <div class="card">
+      <div class="row">
+        <input type="month" id="pyMonth" style="flex:0 1 170px">
+        <button class="b sm" id="pyCalc" hidden>計算預覽</button>
+        <button class="b g sm" id="pyLock" hidden>鎖定</button>
+        <button class="b g sm" id="pyUnlock" hidden>解鎖</button>
+        <button class="b g sm" id="pyExport" hidden>匯出 Excel</button>
+      </div>
+      <div id="pyStatus" class="mute" style="margin-top:10px"></div>
+    </div>
+    <div class="card" id="pyWarn" hidden></div>
+    <div class="card" id="pySum"></div>
+    <div class="card" id="pyCost" hidden></div>
+    <div id="pyList"></div>
+    <div class="card" id="pyDeal" hidden></div>
+  </section>
+
+  <section id="p-mypay" hidden>
+    <div class="card" id="mpProg"></div>
+    <div id="mpList"></div>
+  </section>
+
   <section id="p-settings" hidden>
 
     <div class="card">
@@ -1116,7 +1153,7 @@ try {
   sessionStorage.removeItem("pw"); // 清掉舊版存的明文密碼
 } catch(e) {}
 
-let ROLE = "boss", MYNAME = "", MYACC = "";
+let ROLE = "boss", MYNAME = "", MYACC = "", PAYACC = "";
 let S = {hours:[],services:[],bookings:[],members:[]};
 let svc = [], dirty = new Map(), tab = "bookings", tt;
 
@@ -1129,7 +1166,9 @@ const TITLES = {
   rentals:["場租","登記教室出租、維修或不開放時段；登記後那間教室（或那張床）不會再被客戶預約。"],
   staff:["員工","新增員工帳號、改姓名、停用或重設密碼。員工第一次用初始密碼登入後要自己改密碼。"],
   myfree:["我的空檔","點選日期，標示你那天哪些時段有空；管理員會依這裡分配課程。"],
-  myjobs:["我的課表","管理員指派給你的課程。課程結束後，可以在這裡確認完成、取消或改期。"]
+  myjobs:["我的課表","管理員指派給你的課程。課程結束後，可以在這裡確認完成、取消或改期。"],
+  payroll:["薪資結算","從預約與收款紀錄計算每月薪資：預覽 → 填加給扣款與核准 → 鎖定 → 匯出。"],
+  mypay:["我的薪資","本月累積堂數，以及已結算的薪資單明細。"]
 };
 
 function toast(m) {
@@ -1207,7 +1246,10 @@ const ROLE_TABS = {
 function applyRole() {
   $("testbar").hidden = ROLE!=="master";
 
-  const tabs = ROLE_TABS[ROLE] || ROLE_TABS.boss;
+  const tabs = (ROLE_TABS[ROLE] || ROLE_TABS.boss).slice();
+  // 薪資：結算／檢視權限看「薪資結算」，有員工帳號的人（含店長）看「我的薪資」
+  if (PAYACC==="settle" || PAYACC==="view") tabs.push("payroll");
+  if (MYACC) tabs.push("mypay");
   document.querySelectorAll("#tabs .pill").forEach(p=>{
     p.hidden = !tabs.includes(p.dataset.t);
   });
@@ -1298,6 +1340,7 @@ async function enterApp() {
   ROLE = w.role || "boss";
   MYNAME = w.name || "";
   MYACC = w.account || "";
+  PAYACC = w.payroll || "";
 
   if (ROLE==="staff") await loadStaff();
   else await load();
@@ -1432,7 +1475,7 @@ function setTab(t) {
   document.querySelectorAll("#tabs .pill").forEach(x=>{
     x.classList.toggle("on",x.dataset.t===t);
   });
-  ["bookings","hours","rentals","services","members","staff","settings","myfree","myjobs"].forEach(k=>{
+  ["bookings","hours","rentals","services","members","staff","settings","myfree","myjobs","payroll","mypay"].forEach(k=>{
     $("p-"+k).hidden = k!==t;
   });
   $("title").textContent = TITLES[t][0];
@@ -1441,6 +1484,8 @@ function setTab(t) {
   if (t==="settings") loadProps();
   if (t==="staff") loadStaffList();
   if (t==="rentals") initRentalForm();
+  if (t==="payroll") loadPayroll();
+  if (t==="mypay") loadMyPay();
 }
 
 $("tabs").onclick = e => {
@@ -2304,6 +2349,8 @@ function buyForm(m, plans) {
       <div style="flex:1 1 150px"><label>專屬教練 1（必填）</label><select data-f="c1">${so(cur[0]||"")}</select></div>
       <div style="flex:1 1 150px"><label>專屬教練 2（選填）</label><select data-f="c2">${so(cur[1]||"")}</select></div>
     </div>
+    <label>業績歸屬（有兩位教練時才需要選）</label>
+    <select data-f="sales"><option value="c1">教練 1 自己拿</option><option value="c2">教練 2 自己拿</option><option value="split">兩位對分</option></select>
     <button class="b" style="margin-top:12px" data-buyok="1" data-row="${m._row}">確認購買</button>
   </div>`;
 }
@@ -2465,11 +2512,13 @@ $("mlist").onclick=async e=>{
       toast("已調整堂數"+notifyTail(r1,mnotify));
     } else if (b.dataset.buyok) {
       const coaches=[f("c1"),f("c2")].filter(Boolean);
-      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),last5:f("last5"),coaches,notify:mnotify};
+      const salesSel=f("sales"), salesCoach=coaches.length>1?(salesSel==="split"?"對分":(salesSel==="c2"?f("c2"):f("c1"))):"";
+      const body={...mWho(m),plan:f("plan"),type:f("type"),gift:f("gift")||0,expiry:f("expiry"),price:f("price"),paid:f("paid"),method:f("method"),last5:f("last5"),coaches,salesCoach,notify:mnotify};
       if (!coaches.length) { toast("請至少指定 1 位專屬教練"); b.disabled=false; return; }
       if (+body.paid>0&&!body.method) { toast("請選擇付款方式（刷卡／現金／轉帳）"); b.disabled=false; return; }
       const unpaid=(+body.price||0)-(+body.paid||0);
-      if (!confirm(`為 ${m["姓名"]} 新增「${body.plan}」${+body.gift?`（贈 ${body.gift} 堂）`:""}？\n應收 $${body.price}，已收 $${body.paid}${unpaid>0?`，未收 $${unpaid}`:""}。`)) { b.disabled=false; return; }
+      const salesTxt=coaches.length>1?(salesCoach==="對分"?"兩位教練對分":((S.staff||[]).find(s=>sameAcct(s.account,salesCoach))||{name:salesCoach}).name+" 自己拿"):"";
+      if (!confirm(`為 ${m["姓名"]} 新增「${body.plan}」${+body.gift?`（贈 ${body.gift} 堂）`:""}？\n應收 $${body.price}，已收 $${body.paid}${unpaid>0?`，未收 $${unpaid}`:""}。${salesTxt?`\n業績：${salesTxt}`:""}`)) { b.disabled=false; return; }
       const r2=await api("addPackage",body);
       (MOPEN[row]=MOPEN[row]||{}).buy=false;
       toast("已新增課程"+notifyTail(r2,mnotify));
@@ -3264,6 +3313,173 @@ function renderAll() {
   renderServices();
   renderMembers();
   updBar();
+}
+
+/* ---------- 薪資（Payroll.gs）：薪資結算（老闆／店長檢視）、我的薪資（員工） ---------- */
+const PY = {month:"", data:null, open:{}};
+const pyM = n => "$"+Math.round(+n||0).toLocaleString("en-US");
+const pyThisMonth = () => new Date().toLocaleDateString("sv-SE",{timeZone:"Asia/Taipei"}).slice(0,7);
+const PY_IN = [["其他加給","num"],["加給說明","text"],["核准調整扣款","num"],["調整原因","text"],["勞保自付","num"],["健保自付","num"],["所得稅扣繳","num"],["其他法定扣項","num"],["雇主勞保","num"],["雇主健保","num"],["雇主勞退","num"]];
+const PY_COST = ["已履約收入","管理費","水電","行銷","耗材","其他成本"];
+
+// 一位員工的薪資明細（結算頁、我的薪資共用）
+function pyDetail(r) {
+  let d = {};
+  try { d = JSON.parse(r["明細JSON"]||"{}"); } catch(e) {}
+  const c = d.counts||{};
+  const line = (a,b,v)=>`<tr><td>${a}</td><td class="mute">${b}</td><td>${v}</td></tr>`;
+  let h = `<table class="py-tbl">`
+    + line("固定底薪","",pyM(r["固定底薪"]))
+    + line("一對一正式課",`${c.one||0} 堂・${esc(r["身份"])}`,pyM(r["一對一課費"]))
+    + line("一對二正式課",`${c.pair||0} 堂 × ${pyM(d.pairRate)}`,pyM(r["一對二課費"]))
+    + line("體驗課",`Reformer ${c.trialR||0}・Cadillac ${c.trialC||0}・一對二 ${c.trialP||0}`,pyM(r["體驗課費"]))
+    + line("體驗成交",`${c.deals||0} 人`,pyM(r["成交獎金"]))
+    + line("銷售抽成",`業績 ${pyM(c.sales)}・${esc(d.commissionMode||"")}`,pyM(r["銷售抽成"]))
+    + line("堂數獎金",`正式 ${d.formalCount||0} 堂${d.nextCountTier?`・差 ${d.nextCountTier.gap} 堂到 ${d.nextCountTier.threshold}`:""}`,pyM(r["堂數獎金"]))
+    + line("店長團隊獎金","",pyM(r["團隊獎金"]))
+    + line("其他加給","",pyM(r["其他加給"]))
+    + line("核准調整扣款","",(+r["核准調整扣款"]?"−":"")+pyM(r["核准調整扣款"]))
+    + `<tr class="tot"><td>薪資毛額</td><td></td><td>${pyM(r["薪資毛額"])}</td></tr>`
+    + line("法定扣項","勞健保、扣繳",(+r["法定扣項合計"]?"−":"")+pyM(r["法定扣項合計"]))
+    + `<tr class="tot"><td>實發淨額</td><td></td><td>${pyM(r["實發淨額"])}</td></tr></table>`;
+  const tiers = (d.oneTiers||[]).filter(t=>t.qty>0);
+  if (tiers.length) h += `<div class="mute" style="margin-top:10px">一對一級距：${tiers.map(t=>`${t.lo+1}${t.hi?"–"+t.hi:" 以上"} 堂 ${t.qty}×${pyM(t.rate)}`).join("；")}</div>`;
+  if ((d.salesItems||[]).length) h += `<div class="mute" style="margin-top:6px">業績來源：${d.salesItems.map(s=>`${esc(s.date)} ${esc(s.type)} ${pyM(s.amount)}`).join("；")}</div>`;
+  if ((d.dealItems||[]).length) h += `<div class="mute" style="margin-top:6px">成交：${d.dealItems.map(s=>`${esc(fixPhone(String(s.phone)))}${s.auto?"（自動）":"（人工："+esc(s.reason)+"）"}`).join("；")}</div>`;
+  return h;
+}
+
+async function loadPayroll(action="payrollGet") {
+  PY.month = $("pyMonth").value || pyThisMonth();
+  $("pyMonth").value = PY.month;
+  $("pyStatus").textContent = action==="payrollPreview" ? "計算中…" : "讀取中…";
+  try {
+    PY.data = await api(action,{month:PY.month});
+    renderPayroll();
+    if (action==="payrollPreview") toast("已重新計算");
+  } catch(e) {
+    $("pyStatus").textContent = "";
+    toast(e.message);
+  }
+}
+
+function renderPayroll() {
+  const d = PY.data, settle = d.access==="settle", editable = settle && !d.locked;
+  const s = d.summary, sum = k=>d.rows.reduce((a,r)=>a+(+r[k]||0),0);
+
+  $("pyStatus").innerHTML = !d.rows.length ? "這個月還沒計算"
+    : (d.locked?`<span class="py-tag lock">已鎖定</span>`:`<span class="py-tag">預覽</span>`)
+      + (s?` <span class="mute">${esc(s["計算時間"])}・${esc(s["計算人"])}・規則版本 ${esc(s["規則版本"])}</span>`:"");
+  ["pyCalc","pyLock","pyUnlock","pyExport"].forEach(id=>$(id).hidden=!settle);
+  $("pyCalc").disabled = d.locked;
+  $("pyLock").disabled = d.locked || !d.rows.length;
+  $("pyUnlock").disabled = !d.locked;
+  $("pyExport").disabled = !d.rows.length;
+
+  $("pyWarn").hidden = !d.warnings.length;
+  $("pyWarn").innerHTML = `<b>需要確認</b><div class="py-warn">${d.warnings.map(w=>"・"+esc(w)).join("<br>")}</div>`;
+
+  $("pySum").innerHTML = s
+    ? `<div class="py-grid">${[["全店實收",pyM(s["全店實收"])],["其中場租",pyM(s["場租收入"])],["團隊獎金級距",pyM(s["團隊級距獎金"])],["核准比例",Math.round(+s["核准比例"]*100)+"%"],["薪資毛額合計",pyM(sum("薪資毛額"))],["實發合計",pyM(sum("實發淨額"))],["公司人事成本",pyM(sum("公司人事成本"))]]
+        .map(([a,b])=>`<div class="py-kpi"><span class="mute">${a}</span><b>${b}</b></div>`).join("")}</div>`
+    : `<p class="mute" style="margin:0">尚未計算。${settle?"填好下面的資料後按「計算預覽」。":""}</p>`;
+
+  const c = d.costs||{}, dis = editable?"":"disabled";
+  $("pyCost").hidden = !settle;
+  $("pyCost").innerHTML = `<b>營運成本與團隊獎金核准</b>
+    <div class="row" style="margin-top:8px">${PY_COST.map(k=>`<div style="flex:1 1 130px"><label class="mute">${k}</label><input data-pc="${k}" type="number" min="0" value="${esc(c[k]??"")}" style="width:100%" ${dis}></div>`).join("")}</div>
+    <div class="row" style="margin-top:8px">
+      <div style="flex:0 1 160px"><label class="mute">團隊獎金核准比例</label><select data-pc="團隊獎金核准比例" style="width:100%" ${dis}><option value="">未核准</option>${[["1","100%"],["0.5","50%"],["0","0%"]].map(([v,t])=>`<option value="${v}" ${String(c["團隊獎金核准比例"]??"")===v?"selected":""}>${t}</option>`).join("")}</select></div>
+      <div style="flex:1 1 200px"><label class="mute">核准原因（不是 100% 必填）</label><input data-pc="核准原因" value="${esc(c["核准原因"]??"")}" style="width:100%" ${dis}></div>
+    </div>
+    ${c["核准人"]?`<div class="mute" style="margin-top:6px">核准人：${esc(c["核准人"])}・${esc(c["核准時間"]||"")}</div>`:""}
+    ${editable?`<button class="b sm" id="pyCostSave" style="margin-top:10px">儲存</button><span class="mute" style="margin-left:8px">儲存後請重新按「計算預覽」</span>`:""}`;
+
+  const inp = {};
+  (d.inputs||[]).forEach(x=>inp[String(x["員工ID"]).toLowerCase()]=x);
+  $("pyList").innerHTML = d.rows.map(r=>{
+    const id = String(r["員工ID"]).toLowerCase(), o = PY.open[id], x = inp[id]||{};
+    const form = editable ? `<div class="mbox" data-pyin="${esc(id)}"><b>本月加給、扣款與勞健保</b>
+        <div class="row">${PY_IN.map(([k,t])=>`<div style="flex:1 1 ${t==="text"?200:110}px"><label class="mute">${k}</label><input data-k="${k}" ${t==="num"?'type="number" min="0"':""} value="${esc(x[k]??"")}" style="width:100%"></div>`).join("")}</div>
+        <button class="b sm" data-pysave="${esc(id)}" style="margin-top:10px">儲存</button></div>` : "";
+    return `<div class="card">
+      <div class="row sp"><div><b>${esc(r["姓名"]||id)}</b> <span class="mute">${esc(r["身份"])}・${esc(id)}</span></div>
+        <div style="text-align:right"><div class="mute">毛額 ${pyM(r["薪資毛額"])}</div><b>實發 ${pyM(r["實發淨額"])}</b></div></div>
+      <button class="b g sm" data-pyopen="${esc(id)}" style="margin-top:8px">${o?"收合":(editable?"明細／填加給扣款":"明細")}</button>
+      ${o?`<div class="mbox">${pyDetail(r)}</div>${form}`:""}
+    </div>`;
+  }).join("");
+
+  $("pyDeal").hidden = !editable;
+  $("pyDeal").innerHTML = !editable ? "" : `<b>成交人工更正</b>
+    <p class="mute" style="margin:4px 0 8px">系統自動判斷：會員第一筆購課在體驗後 7 天內，算給上體驗課的教練。一對二體驗的同行者、或要作廢時在這裡登記。</p>
+    <div class="row"><input data-pd="phone" placeholder="會員電話" style="flex:1 1 130px">
+      <select data-pd="coach" style="flex:1 1 120px"><option value="">歸屬教練</option>${(S.staff||[]).map(s=>`<option value="${esc(s.account)}">${esc(s.name)}</option>`).join("")}</select>
+      <select data-pd="act" style="flex:0 1 100px"><option>新增</option><option>作廢</option></select>
+      <input data-pd="reason" placeholder="原因（必填）" style="flex:2 1 180px">
+      <button class="b sm" id="pyDealOk">登記</button></div>`;
+}
+
+$("pyMonth").onchange = ()=>loadPayroll();
+$("pyCalc").onclick = ()=>{
+  if (confirm(`重新計算 ${PY.month} 的薪資？\n會從預約、收款紀錄重新抓資料，覆蓋這個月的預覽。`)) loadPayroll("payrollPreview");
+};
+$("pyLock").onclick = async ()=>{
+  if (!confirm(`鎖定 ${PY.month}？\n鎖定後員工就看得到薪資單，也不能再修改或重算；要改需先解鎖並填原因。`)) return;
+  try { toast((await api("payrollLock",{month:PY.month})).msg); loadPayroll(); } catch(e) { toast(e.message); }
+};
+$("pyUnlock").onclick = async ()=>{
+  const reason = prompt("解鎖原因（必填，會留在操作紀錄）：");
+  if (!reason || !reason.trim()) return;
+  try { toast((await api("payrollUnlock",{month:PY.month,reason:reason.trim()})).msg); loadPayroll(); } catch(e) { toast(e.message); }
+};
+$("pyExport").onclick = async ()=>{
+  try { toast("匯出中…"); const r = await api("payrollExport",{month:PY.month}); window.open(r.url,"_blank"); } catch(e) { toast(e.message); }
+};
+
+$("p-payroll").addEventListener("click", async e=>{
+  const op = e.target.closest("[data-pyopen]");
+  if (op) { PY.open[op.dataset.pyopen] = !PY.open[op.dataset.pyopen]; return renderPayroll(); }
+
+  const btn = e.target.closest("[data-pysave],#pyCostSave,#pyDealOk");
+  if (!btn) return;
+  btn.disabled = true;
+  try {
+    if (btn.dataset.pysave) {
+      const data = {};
+      btn.closest("[data-pyin]").querySelectorAll("[data-k]").forEach(i=>data[i.dataset.k]=i.value.trim());
+      await api("payrollSaveInput",{month:PY.month,staffId:btn.dataset.pysave,data});
+    } else if (btn.id==="pyCostSave") {
+      const data = {};
+      $("pyCost").querySelectorAll("[data-pc]").forEach(i=>data[i.dataset.pc]=i.value.trim());
+      await api("payrollSaveCosts",{month:PY.month,data});
+    } else {
+      const g = k=>$("pyDeal").querySelector(`[data-pd="${k}"]`).value.trim();
+      await api("payrollDealAdjust",{month:PY.month,phone:g("phone"),coach:g("coach"),act:g("act"),reason:g("reason")});
+      $("pyDeal").querySelectorAll("input").forEach(i=>i.value="");
+    }
+    toast("已儲存，請重新按「計算預覽」");
+  } catch(err) {
+    toast(err.message);
+  }
+  btn.disabled = false;
+});
+
+async function loadMyPay() {
+  $("mpProg").innerHTML = '<p class="mute" style="margin:0">讀取中…</p>';
+  try {
+    const [p,s] = await Promise.all([api("myPayProgress",{month:pyThisMonth()}), api("myPayslips")]);
+    const nt = p.nextOneTier, nc = p.nextCountBonus;
+    $("mpProg").innerHTML = `<b>${mLabel(p.month)} 目前累積</b>
+      <div class="py-grid" style="margin-top:8px">${[["一對一",p.one+" 堂"],["一對二",p.pair+" 堂"],["體驗課",p.trials+" 堂"]].map(([a,b])=>`<div class="py-kpi"><span class="mute">${a}</span><b>${b}</b></div>`).join("")}</div>
+      <p class="mute" style="margin:10px 0 0">${nt?`一對一再 ${nt.gap} 堂進入下一個級距。`:""}${nc?`正式課再 ${nc.gap} 堂達到堂數獎金門檻（${nc.threshold} 堂）。`:""}只計算已按「完成」的課，金額以每月結算後的薪資單為準。</p>`;
+    $("mpList").innerHTML = s.rows.length
+      ? s.rows.map(r=>`<div class="card"><div class="row sp"><b>${mLabel(String(r["月份"]))} 薪資單</b><b>${pyM(r["實發淨額"])}</b></div><div class="mbox">${pyDetail(r)}</div></div>`).join("")
+      : '<div class="card"><p class="mute" style="margin:0">還沒有已結算的薪資單。</p></div>';
+  } catch(e) {
+    $("mpProg").innerHTML = `<p class="mute" style="margin:0">${esc(e.message)}</p>`;
+    $("mpList").innerHTML = "";
+  }
 }
 </script>
 </body>
